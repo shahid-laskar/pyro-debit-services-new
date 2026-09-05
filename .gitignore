@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+pytest-cache-files-*/
+.venv/
+venv/
+nginx/ssl/*.crt
+nginx/ssl/*.key
+nginx/ssl/*.pem
+*.log
+.DS_Store
+*.tar.*
+*.tar.gz
