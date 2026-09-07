@@ -1,7 +1,8 @@
 import logging
-from typing import List
+from typing import List, Optional, Tuple
 
 from app.auth.token_manager import PyroAuthService
+from app.context import ExecutionContext
 from app.db.oracle import get_oracle_conn
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,75 @@ _STATUS_QM = "QM"      # MPIN error — Sanchar Mitra sets; we re-pick after fix
 _STATUS_QB = "QB"      # balance error — Sanchar Mitra sets; we re-pick after top-up
 
 _MODULE_TYPE = "ESIM"
+
+# ── Q013 Claim Query with exact ID (PK), status guard, module guard, and CIRCLE_CODE guard ─────
+ESIM_CLAIM_SQL = """
+UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
+SET AMOUNT_DEDUCT_FLAG = 'P',
+    AMOUNT_DEDUCT_DATE = SYSDATE,
+    AMOUNT_DEDUCT_REMARKS = 'Processing started'
+WHERE ID = :id
+  AND CIRCLE_CODE = :circle_code
+  AND MODULE_TYPE = 'ESIM'
+  AND AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB')
+""".strip()
+
+
+def build_esim_claim_query() -> str:
+    """Return Q013 claim query SQL text with circle guard and PK."""
+    return ESIM_CLAIM_SQL
+
+
+def build_esim_candidate_query(
+    batch_size: int,
+    context: Optional[ExecutionContext] = None,
+) -> Tuple[str, dict]:
+    """Construct candidate discovery query Q012 and parameter dictionary.
+
+    If context is FILTERED, injects:
+        AND CIRCLE_CODE IN (:c_0, :c_1, ...)
+    If context is ALL (or None), omits circle filtering to preserve nationwide behavior.
+    Preserves FIFO ordering (REQUEST_DATE ASC) and module filter (MODULE_TYPE = 'ESIM').
+    """
+    bind_params: dict = {"batch_size": batch_size}
+    circle_predicate = ""
+
+    if context and context.mode == "FILTERED" and context.circle_codes:
+        placeholders = []
+        for idx, code in enumerate(context.circle_codes):
+            param_name = f"c_{idx}"
+            placeholders.append(f":{param_name}")
+            bind_params[param_name] = code
+        circle_predicate = f"  AND CIRCLE_CODE IN ({', '.join(placeholders)})\n"
+
+    sql = f"""
+SELECT *
+FROM (
+    SELECT
+        ID,
+        REFID,
+        CTOPUPNO,
+        GSMNUMBER,
+        SIMNUMBER,
+        AMOUNT,
+        CAF_ADMIN.F_DECRYPT(MPIN) AS plain_mpin,
+        MPIN_LENGTH,
+        SS_REQUEST_ID,
+        MODULE_TYPE,
+        REQUEST_DATE,
+        AMOUNT_DEDUCT_FLAG,
+        CIRCLE_CODE,
+        DEALERCODE,
+        SWAP_TYPE,
+        SOURCE
+    FROM CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
+    WHERE AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB')
+      AND MODULE_TYPE = 'ESIM'
+{circle_predicate}    ORDER BY REQUEST_DATE ASC
+)
+WHERE ROWNUM <= :batch_size
+    """.strip()
+    return sql, bind_params
 
 
 class EsimAdapter:    
@@ -38,53 +108,27 @@ class EsimAdapter:
 
     # ── Interface implementation ───────────────────────────────────────────────
 
-    def fetch_and_claim(self, batch_size: int) -> List[dict]:
+    def fetch_and_claim(
+        self,
+        batch_size: int,
+        context: Optional[ExecutionContext] = None,
+    ) -> List[dict]:
         
         if not self.enabled:
             return []
 
-        select_sql = """
-            SELECT *
-            FROM (
-                SELECT
-                    ID,
-                    REFID,
-                    CTOPUPNO,
-                    GSMNUMBER,
-                    SIMNUMBER,
-                    AMOUNT,
-                    CAF_ADMIN.F_DECRYPT(MPIN) AS plain_mpin,
-                    MPIN_LENGTH,
-                    SS_REQUEST_ID,
-                    MODULE_TYPE,
-                    REQUEST_DATE,
-                    AMOUNT_DEDUCT_FLAG,
-                    CIRCLE_CODE,
-                    DEALERCODE,
-                    SWAP_TYPE,
-                    SOURCE
-                FROM CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
-                WHERE AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB')
-                  AND MODULE_TYPE         = 'ESIM'                 
-                ORDER BY REQUEST_DATE ASC
-            )
-            WHERE ROWNUM <= :batch_size
-        """
+        ctx = context if context is not None else ExecutionContext.create(
+            source="SCHEDULED",
+            service_type=self.service_type,
+        )
 
-        claim_sql = """
-            UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
-            SET    AMOUNT_DEDUCT_FLAG    = 'P',
-                   AMOUNT_DEDUCT_DATE    = SYSDATE,
-                   AMOUNT_DEDUCT_REMARKS = 'Processing started'
-            WHERE  ID                    = :id
-              AND  AMOUNT_DEDUCT_FLAG    IN ('N', 'QM', 'QB')
-              AND  MODULE_TYPE           = 'ESIM'
-        """
+        select_sql, bind_params = build_esim_candidate_query(batch_size, ctx)
+        claim_sql = build_esim_claim_query()
 
         with get_oracle_conn() as conn:
             cur = conn.cursor()
 
-            cur.execute(select_sql, batch_size=batch_size)
+            cur.execute(select_sql, bind_params)
             cols       = [c[0].lower() for c in cur.description]
             candidates = [dict(zip(cols, row)) for row in cur.fetchall()]
 
@@ -93,21 +137,41 @@ class EsimAdapter:
 
             claimed = []
             for row in candidates:
-                cur.execute(claim_sql, {"id": row["id"]})
+                circle_code = row.get("circle_code")
+                # Defense-in-depth: skip row if circle not permitted in this context
+                if not ctx.is_circle_allowed(circle_code):
+                    logger.warning(
+                        "[ESIM] Candidate ID=%s has circle_code=%s disallowed in %s mode",
+                        row.get("id"), circle_code, ctx.mode,
+                    )
+                    continue
+
+                cur.execute(claim_sql, {
+                    "id": row["id"],
+                    "circle_code": circle_code,
+                })
                 if cur.rowcount == 1:
                     claimed.append(row)
+                elif cur.rowcount > 1:
+                    logger.critical(
+                        "[ESIM] Critical identity anomaly: ID=%s modified %d rows (expected 1). Discarding claim.",
+                        row["id"], cur.rowcount,
+                    )
 
             conn.commit()
 
         lost = len(candidates) - len(claimed)
         if lost:
             logger.warning(
-                "[ESIM] fetch_and_claim: %d candidate(s) found, %d claimed "
-                "(%d lost to concurrent worker)",
-                len(candidates), len(claimed), lost,
+                "[ESIM] fetch_and_claim [%s]: %d candidate(s) found, %d claimed "
+                "(%d lost to concurrent worker or skipped)",
+                ctx.execution_id[:8], len(candidates), len(claimed), lost,
             )
         else:
-            logger.info("[ESIM] fetch_and_claim: %d row(s) claimed", len(claimed))
+            logger.info(
+                "[ESIM] fetch_and_claim [%s]: %d row(s) claimed (mode=%s, zones=%s)",
+                ctx.execution_id[:8], len(claimed), ctx.mode, ctx.zones_display,
+            )
 
         return claimed
 
