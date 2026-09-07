@@ -1,4 +1,7 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.zones import InvalidZoneError, resolve_zones
 
 
 class Settings(BaseSettings):
@@ -29,6 +32,20 @@ class Settings(BaseSettings):
     # ── Deployment ────────────────────────────────────────────────────────────
     root_path: str = "/smpyro"
     admin_api_key: str = ""
+
+    # ── Zone rollout configuration ────────────────────────────────────────────
+    enabled_zones: str = "ALL"
+
+    @field_validator("enabled_zones", mode="after")
+    @classmethod
+    def validate_enabled_zones(cls, v: str) -> str:
+        try:
+            selection = resolve_zones(v)
+            if selection.mode == "ALL":
+                return "ALL"
+            return ",".join(selection.zone_codes)
+        except InvalidZoneError as exc:
+            raise ValueError(f"Invalid ENABLED_ZONES configuration: {exc}") from exc
 
     # ── Scheduler ─────────────────────────────────────────────────────────────
     enable_scheduler: bool = True
