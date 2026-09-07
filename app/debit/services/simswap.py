@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 from app.auth.token_manager import PyroAuthService
 from app.context import ExecutionContext
 from app.db.oracle import get_oracle_conn
+from app.debit.services.base import WritebackError
 
 logger = logging.getLogger(__name__)
 
@@ -242,17 +243,20 @@ class SimswapAdapter:
                     "id":          record_id,
                 })
                 if cur.rowcount == 0:
-                    logger.warning(
-                        "[SIMSWAP] mark_success: ID=%s rowcount=0 "
-                        "(already moved out of P?)", record_id
+                    raise WritebackError(
+                        f"[SIMSWAP] mark_success ID={record_id} rowcount=0 (row not in status 'P')"
                     )
                 conn.commit()
+        except WritebackError:
+            raise
         except Exception as exc:
-            logger.error(
-                "[SIMSWAP] mark_success primary DB failure (non-fatal) ID=%s: %s",
+            logger.critical(
+                "[SIMSWAP] mark_success primary Oracle DB exception for ID=%s: %s",
                 record_id, exc,
             )
-            return 
+            raise WritebackError(
+                f"[SIMSWAP] mark_success primary DB failure for ID={record_id}: {exc}"
+            ) from exc
 
         # ── Phase 2: secondary writeback — CAF_ADMIN.BCD ─────────────────────
         secondary_sql = """
@@ -286,6 +290,29 @@ class SimswapAdapter:
                 "WHERE GSMNUMBER = '%s'. Primary record ID=%s is already Y. Error: %s",
                 gsmnumber, record_id, exc,
             )
+
+    def mark_reconciliation_required(
+        self, record: dict, pyro_txn_id: str, error_detail: str
+    ) -> None:
+        """Emergency update to mark record in Oracle as requiring reconciliation, preventing cleanup reset."""
+        sql = """
+            UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
+            SET    AMOUNT_DEDUCT_REMARKS = :remarks
+            WHERE  ID                    = :id
+              AND  AMOUNT_DEDUCT_FLAG    = 'P'
+        """
+        remarks = f"RECONCILIATION_REQUIRED pyroId={pyro_txn_id}: {error_detail}"[:200]
+        try:
+            with get_oracle_conn() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, {"remarks": remarks, "id": record["id"]})
+                conn.commit()
+        except Exception as exc:
+            logger.critical(
+                "[SIMSWAP] mark_reconciliation_required DB failure for ID=%s: %s",
+                record["id"], exc,
+            )
+            raise
 
     def mark_failed(self, record: dict, remarks: str) -> None:
        
@@ -329,6 +356,7 @@ class SimswapAdapter:
               AND  MODULE_TYPE           = 'SIMSWAP'
               AND  AMOUNT_DEDUCT_DATE   IS NOT NULL
               AND  AMOUNT_DEDUCT_DATE    < SYSDATE - (:stuck_minutes / 1440)
+              AND  (AMOUNT_DEDUCT_REMARKS IS NULL OR AMOUNT_DEDUCT_REMARKS NOT LIKE 'RECONCILIATION_REQUIRED%')
         """
         try:
             with get_oracle_conn() as conn:

@@ -30,7 +30,7 @@ async def run_debit_batch(
         return {"service_type": svc, "processed": 0, "success": 0, "failed": 0}
 
     logger.info("[%s] Debit processor: processing %d record(s)", svc, len(records))
-    success = failed = 0
+    success = failed = reconciliation_count = 0
 
     for record in records:
         ref = adapter.get_record_ref(record)
@@ -92,9 +92,54 @@ async def run_debit_batch(
                 f"pyroId={pyro_txn_id} "
                 f"balBefore={bal_before} balAfter={bal_after}"
             )
-            await asyncio.to_thread(adapter.mark_success, record, pyro_txn_id, remarks)
-            logger.info("[%s] ref=%s SUCCESS pyroId=%s", svc, ref, pyro_txn_id)
-            success += 1
+            try:
+                await asyncio.to_thread(adapter.mark_success, record, pyro_txn_id, remarks)
+                logger.info("[%s] ref=%s SUCCESS pyroId=%s", svc, ref, pyro_txn_id)
+                success += 1
+            except Exception as writeback_exc:
+                logger.critical(
+                    "[%s] CRITICAL: Financial debit succeeded (pyroId=%s) but writeback FAILED for ref=%s: %s. "
+                    "Manual reconciliation required to prevent double debits!",
+                    svc, pyro_txn_id, ref, writeback_exc,
+                )
+                # Durably record writeback failure in Postgres debit_txn_log
+                await async_insert_debit_txn_log(
+                    service_type=svc,
+                    oracle_ref_id=ref,
+                    client_id=params.get("client_id"),
+                    source_msisdn=params.get("source_msisdn"),
+                    dest_msisdn=params.get("dest_msisdn"),
+                    amount=params.get("amount"),
+                    api_stage="RECONCILIATION_REQUIRED",
+                    api_endpoint=None,
+                    attempt_no=1,
+                    request_body=None,
+                    response_http_code=response.get("http_status"),
+                    response_body=None,
+                    pyro_status_code=sc,
+                    pyro_status_text=response.get("status"),
+                    pyro_txn_id=pyro_txn_id,
+                    call_started_at=None,
+                    call_ended_at=None,
+                    duration_ms=None,
+                    is_success="Y",
+                    is_perm_failure="Y",
+                    error_class=type(writeback_exc).__name__,
+                    error_detail=str(writeback_exc),
+                )
+                # Mark request in Oracle as requiring reconciliation to prevent cleanup reset
+                try:
+                    await asyncio.to_thread(
+                        adapter.mark_reconciliation_required, record, pyro_txn_id, str(writeback_exc)
+                    )
+                except Exception as recon_exc:
+                    logger.critical(
+                        "[%s] CRITICAL: Failed to mark_reconciliation_required in Oracle for ref=%s: %s",
+                        svc, ref, recon_exc,
+                    )
+                failed += 1
+                reconciliation_count += 1
+                continue
         else:
             remarks = f"[{sc}] {response.get('message', 'Unknown failure')}"
             await asyncio.to_thread(adapter.mark_failed, record, remarks[:2000])
@@ -102,10 +147,11 @@ async def run_debit_batch(
             failed += 1
 
     summary = {
-        "service_type": svc,
-        "processed":    len(records),
-        "success":      success,
-        "failed":       failed,
+        "service_type":            svc,
+        "processed":               len(records),
+        "success":                 success,
+        "failed":                  failed,
+        "reconciliation_required": reconciliation_count,
     }
     logger.info("[%s] Debit batch complete — %s", svc, summary)
     return summary

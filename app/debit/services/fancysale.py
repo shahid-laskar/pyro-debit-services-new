@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 from app.auth.token_manager import PyroAuthService
 from app.context import ExecutionContext
 from app.db.oracle import get_oracle_conn
+from app.debit.services.base import WritebackError
 
 logger = logging.getLogger(__name__)
 
@@ -227,17 +228,43 @@ class FancySaleAdapter:
                     "refid":       record["refid"],
                 })
                 if cur.rowcount == 0:
-                    logger.warning(
-                        "[FANCYSALE] mark_success: REFID=%s rowcount=0 "
-                        "(already moved out of P?)", record["refid"]
+                    raise WritebackError(
+                        f"[FANCYSALE] mark_success REFID={record['refid']} rowcount=0 (row not in status 'P')"
                     )
                 conn.commit()
+        except WritebackError:
+            raise
         except Exception as exc:
-            logger.error(
-                "[FANCYSALE] mark_success DB failure (non-fatal) REFID=%s: %s",
-                record["refid"], exc
+            logger.critical(
+                "[FANCYSALE] mark_success Oracle DB exception for REFID=%s: %s",
+                record["refid"], exc,
             )
+            raise WritebackError(
+                f"[FANCYSALE] mark_success DB failure for REFID={record['refid']}: {exc}"
+            ) from exc
 
+    def mark_reconciliation_required(
+        self, record: dict, pyro_txn_id: str, error_detail: str
+    ) -> None:
+        """Emergency update to mark record in Oracle as requiring reconciliation, preventing cleanup reset."""
+        sql = """
+            UPDATE CAF_ADMIN.VANITYSALE_FRANCH_DATA
+            SET    PYRO_REMARKS   = :remarks
+            WHERE  REFID          = :refid
+              AND  CAF_ENTRY_DONE = 'P'
+        """
+        remarks = f"RECONCILIATION_REQUIRED pyroId={pyro_txn_id}: {error_detail}"[:2000]
+        try:
+            with get_oracle_conn() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, {"remarks": remarks, "refid": record["refid"]})
+                conn.commit()
+        except Exception as exc:
+            logger.critical(
+                "[FANCYSALE] mark_reconciliation_required DB failure for REFID=%s: %s",
+                record["refid"], exc,
+            )
+            raise
 
     def mark_failed(self, record: dict, remarks: str) -> None:
         """Write R + PYRO_REMARKS to Oracle."""
@@ -267,7 +294,6 @@ class FancySaleAdapter:
                 record["refid"], exc
             )
 
-
     def reset_stuck_processing(self, stuck_minutes: int) -> int:
         
         if not self.enabled:
@@ -280,6 +306,7 @@ class FancySaleAdapter:
             WHERE  CAF_ENTRY_DONE  = 'P'
               AND  CAF_ENTRY_DATE IS NOT NULL
               AND  CAF_ENTRY_DATE  < SYSDATE - (:stuck_minutes / 1440)
+              AND  (PYRO_REMARKS IS NULL OR PYRO_REMARKS NOT LIKE 'RECONCILIATION_REQUIRED%')
         """
         try:
             with get_oracle_conn() as conn:

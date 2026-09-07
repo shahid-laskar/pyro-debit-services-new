@@ -4,6 +4,10 @@ from app.auth.token_manager import PyroAuthService
 from app.context import ExecutionContext
 
 
+class WritebackError(RuntimeError):
+    """Raised when primary status writeback to Oracle fails after a successful financial debit."""
+
+
 @runtime_checkable
 class DebitServiceAdapter(Protocol):
     
@@ -38,6 +42,12 @@ class DebitServiceAdapter(Protocol):
        
         ...
 
-    def reset_stuck_processing(self, stuck_minutes: int) -> int:
+    def mark_reconciliation_required(
+        self, record: dict, pyro_txn_id: str, error_detail: str
+    ) -> None:
         
         ...
+
+    def reset_stuck_processing(self, stuck_minutes: int) -> int:
+        
+        ...
