@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     fancysale_password: str = ""
     fancysale_secret_key: str = ""
     fancysale_enabled: bool = True
-    fancysale_batch_size: int = 200
+    fancysale_batch_size: int = 50
     fancysale_interval_minutes: int = 30
     fancysale_stuck_minutes: int = 10
     # ── SimSwap debit credentials (feature off by default) ────────────────────
@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     simswap_password: str = ""
     simswap_secret_key: str = ""
     simswap_enabled: bool = False
-    simswap_batch_size: int = 200
+    simswap_batch_size: int = 50
     simswap_interval_minutes: int = 30
     simswap_stuck_minutes: int = 10
 
@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     esim_password: str = ""
     esim_secret_key: str = ""
     esim_enabled: bool = False
-    esim_batch_size: int = 200
+    esim_batch_size: int = 50
     esim_interval_minutes: int = 30
     esim_stuck_minutes: int = 10
     

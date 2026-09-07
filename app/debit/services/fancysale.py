@@ -1,9 +1,10 @@
 import logging
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Set, Tuple
 
 from app.auth.token_manager import PyroAuthService
 from app.context import ExecutionContext
 from app.db.oracle import get_oracle_conn
+from app.debit.ownership import build_active_exclusion_predicate, ownership_tracker
 from app.debit.services.base import WritebackError
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ VS_STATUS_QB = "QB"     # Balance error — Sanchar Mitra sets; we re-pick after
 
 FETCH_ELIGIBLE = (VS_STATUS_N, VS_STATUS_QM, VS_STATUS_QB)
 
-# ── Q002 Claim Query with exact REFID, status guard, and CIRCLE_CODE guard ─────
+# ── Q002 Claim Query with REFID, status guard, and CIRCLE_CODE guard ───────────
 FANCYSALE_CLAIM_SQL = """
 UPDATE CAF_ADMIN.VANITYSALE_FRANCH_DATA
 SET CAF_ENTRY_DONE = 'P',
@@ -31,7 +32,7 @@ WHERE REFID = :refid
 
 
 def build_fancysale_claim_query() -> str:
-    """Return Q002 claim query SQL text with circle guard."""
+    """Return Q002 claim query SQL text with circle guard and PK."""
     return FANCYSALE_CLAIM_SQL
 
 
@@ -91,7 +92,7 @@ class FancySaleAdapter:
         self,
         token_manager:    PyroAuthService,
         enabled:          bool = True,
-        batch_size:       int  = 200,
+        batch_size:       int  = 50,
         interval_minutes: int  = 30,
         stuck_minutes:    int  = 10,
     ):
@@ -294,12 +295,21 @@ class FancySaleAdapter:
                 record["refid"], exc
             )
 
-    def reset_stuck_processing(self, stuck_minutes: int) -> int:
+    def reset_stuck_processing(
+        self, stuck_minutes: int, active_refs: Optional[Set[Any]] = None
+    ) -> int:
         
         if not self.enabled:
             return 0
 
-        sql = """
+        if active_refs is None:
+            active_refs = ownership_tracker.get_active(self.service_type)
+
+        exclusion_sql, exclusion_params = build_active_exclusion_predicate(
+            "REFID", active_refs
+        )
+
+        sql = f"""
             UPDATE CAF_ADMIN.VANITYSALE_FRANCH_DATA
             SET    CAF_ENTRY_DONE = 'N',
                    PYRO_REMARKS   = 'Reset: stuck in processing state'
@@ -307,17 +317,19 @@ class FancySaleAdapter:
               AND  CAF_ENTRY_DATE IS NOT NULL
               AND  CAF_ENTRY_DATE  < SYSDATE - (:stuck_minutes / 1440)
               AND  (PYRO_REMARKS IS NULL OR PYRO_REMARKS NOT LIKE 'RECONCILIATION_REQUIRED%')
-        """
+{exclusion_sql}        """.strip()
+        params = {"stuck_minutes": stuck_minutes, **exclusion_params}
         try:
             with get_oracle_conn() as conn:
                 cur = conn.cursor()
-                cur.execute(sql, stuck_minutes=stuck_minutes)
+                cur.execute(sql, params)
                 count = cur.rowcount
                 conn.commit()
             if count:
                 logger.warning(
                     "[FANCYSALE] reset_stuck_processing: reset %d stuck-P row(s) "
-                    "older than %d min back to N", count, stuck_minutes
+                    "older than %d min back to N (excluded %d active in-flight)",
+                    count, stuck_minutes, len(active_refs),
                 )
             return count
         except Exception as exc:

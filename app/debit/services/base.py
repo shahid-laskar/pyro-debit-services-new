@@ -1,4 +1,4 @@
-from typing import List, Optional, Protocol, runtime_checkable
+from typing import Any, List, Optional, Protocol, Set, runtime_checkable
 
 from app.auth.token_manager import PyroAuthService
 from app.context import ExecutionContext
@@ -48,6 +48,8 @@ class DebitServiceAdapter(Protocol):
         
         ...
 
-    def reset_stuck_processing(self, stuck_minutes: int) -> int:
+    def reset_stuck_processing(
+        self, stuck_minutes: int, active_refs: Optional[Set[Any]] = None
+    ) -> int:
         
         ...
