@@ -55,18 +55,53 @@ async def debit_status():
     tags=["Admin"],
     dependencies=[Depends(require_admin_api_key)],
 )
-async def trigger_debit(service_type: str):
-   
+async def trigger_debit(
+    service_type: str,
+    zones: Optional[str] = Query(
+        default=None,
+        description=(
+            "Optional comma-separated zone codes to process (e.g. 'NZ', 'NZ,WZ', 'ALL'). "
+            "If omitted, strictly defaults to settings.enabled_zones. Never silently expands to ALL."
+        ),
+    ),
+):
+    from app.context import ExecutionContext, ExecutionSource
     from app.debit.processor import run_debit_batch
     from app.debit.services.registry import get_service
+    from app.zones import InvalidZoneError
 
     try:
         adapter = get_service(service_type)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    summary = await run_debit_batch(adapter)
-    return {"triggered": True, "summary": summary}
+    try:
+        context = ExecutionContext.create(
+            source=ExecutionSource.MANUAL_API,
+            zones_str=zones,
+            service_type=service_type.lower(),
+        )
+    except InvalidZoneError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    logger.info(
+        "[ADMIN] trigger_debit invoked for %s: requested_zones=%s, effective_zones=%s, configured_zones=%s, mode=%s",
+        service_type,
+        zones,
+        list(context.zone_codes),
+        settings.enabled_zones,
+        context.mode,
+    )
+
+    summary = await run_debit_batch(adapter, context=context)
+    return {
+        "triggered": True,
+        "requested_zones": zones,
+        "effective_zones": list(context.zone_codes),
+        "configured_zones": settings.enabled_zones,
+        "mode": context.mode,
+        "summary": summary,
+    }
 
 
 @router.post(
@@ -84,23 +119,61 @@ async def reset_stuck_debit(
             "Pass 0 explicitly to reset ALL 'P' records regardless of age — use with caution."
         ),
     ),
+    zones: Optional[str] = Query(
+        default=None,
+        description=(
+            "Optional comma-separated zone codes to reset (e.g. 'NZ', 'NZ,WZ', 'ALL'). "
+            "If omitted, strictly defaults to settings.enabled_zones. Never silently expands to ALL."
+        ),
+    ),
 ):
     """
     Emergency reset: move stuck CAF_ENTRY_DONE='P' records back to 'N' for a service.
     Omitting stuck_minutes uses the service's own configured threshold (safe default).
     Passing stuck_minutes=0 resets ALL P records regardless of age.
+    Omitting zones uses configured settings.enabled_zones (never silently expands to ALL).
     """
+    from app.context import ExecutionContext, ExecutionSource
     from app.debit.services.registry import get_service
+    from app.zones import InvalidZoneError
 
     try:
         adapter = get_service(service_type)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
+    try:
+        context = ExecutionContext.create(
+            source=ExecutionSource.MANUAL_API,
+            zones_str=zones,
+            service_type=service_type.lower(),
+        )
+    except InvalidZoneError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     effective_minutes = stuck_minutes if stuck_minutes is not None else adapter.stuck_minutes
-    count = await asyncio.to_thread(adapter.reset_stuck_processing, effective_minutes)
+
+    logger.warning(
+        "[ADMIN_AUDIT] reset_stuck_debit invoked for %s: stuck_minutes=%d, requested_zones=%s, effective_zones=%s, configured_zones=%s, mode=%s",
+        service_type,
+        effective_minutes,
+        zones,
+        list(context.zone_codes),
+        settings.enabled_zones,
+        context.mode,
+    )
+
+    count = await asyncio.to_thread(
+        adapter.reset_stuck_processing,
+        effective_minutes,
+        context=context,
+    )
     return {
         "service_type":       service_type,
         "stuck_minutes_used": effective_minutes,
+        "requested_zones":    zones,
+        "effective_zones":    list(context.zone_codes),
+        "configured_zones":   settings.enabled_zones,
+        "mode":               context.mode,
         "rows_reset":         count,
     }

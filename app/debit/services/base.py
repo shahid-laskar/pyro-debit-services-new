@@ -49,7 +49,10 @@ class DebitServiceAdapter(Protocol):
         ...
 
     def reset_stuck_processing(
-        self, stuck_minutes: int, active_refs: Optional[Set[Any]] = None
+        self,
+        stuck_minutes: int,
+        context: Optional[ExecutionContext] = None,
+        active_refs: Optional[Set[Any]] = None,
     ) -> int:
         
         ...

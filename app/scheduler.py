@@ -17,6 +17,7 @@ scheduler = AsyncIOScheduler()
 async def _debit_job(service_type: str):
     
     try:
+        from app.context import ExecutionContext, ExecutionSource
         from app.debit.services.registry import SERVICE_REGISTRY
         from app.debit.processor import run_debit_batch
 
@@ -29,8 +30,15 @@ async def _debit_job(service_type: str):
             logger.info("Scheduler: [%s] debit service disabled — skipping", service_type)
             return
 
-        summary = await run_debit_batch(adapter)
-        logger.info("Scheduler: [%s] debit done -- %s", service_type, summary)
+        context = ExecutionContext.create(
+            source=ExecutionSource.SCHEDULED,
+            service_type=service_type.lower(),
+        )
+        summary = await run_debit_batch(adapter, context=context)
+        logger.info(
+            "Scheduler: [%s] debit done (scope=%s) -- %s",
+            service_type, list(context.zone_codes), summary,
+        )
     except Exception as exc:
         logger.error("Scheduler: [%s] debit exception: %s", service_type, exc)
 
@@ -38,14 +46,22 @@ async def _debit_job(service_type: str):
 async def _stuck_cleanup_job():
    
     try:
+        from app.context import ExecutionContext, ExecutionSource
         from app.debit.services.registry import get_enabled_services
         for adapter in get_enabled_services():
+            context = ExecutionContext.create(
+                source=ExecutionSource.SCHEDULED,
+                service_type=adapter.service_type.lower(),
+            )
             count = await asyncio.to_thread(
-                adapter.reset_stuck_processing, adapter.stuck_minutes
+                adapter.reset_stuck_processing,
+                adapter.stuck_minutes,
+                context=context,
             )
             if count:
                 logger.info(
-                    "Scheduler: [%s] reset %d stuck-P row(s)", adapter.service_type, count
+                    "Scheduler: [%s] reset %d stuck-P row(s) (scope=%s)",
+                    adapter.service_type, count, list(context.zone_codes),
                 )
     except Exception as exc:
         logger.error("Scheduler: debit stuck cleanup exception: %s", exc)

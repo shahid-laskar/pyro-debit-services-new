@@ -2,7 +2,7 @@ import logging
 from typing import Any, List, Optional, Set, Tuple
 
 from app.auth.token_manager import PyroAuthService
-from app.context import ExecutionContext
+from app.context import ExecutionContext, ExecutionSource
 from app.db.oracle import get_oracle_conn
 from app.debit.ownership import build_active_exclusion_predicate, ownership_tracker
 from app.debit.services.base import WritebackError
@@ -86,6 +86,50 @@ FROM (
 )
 WHERE ROWNUM <= :batch_size
     """.strip()
+    return sql, bind_params
+
+
+def build_esim_cleanup_query(
+    stuck_minutes: int,
+    context: Optional[ExecutionContext] = None,
+    active_refs: Optional[Set[Any]] = None,
+) -> Tuple[str, dict]:
+    """Construct stuck-record cleanup query Q017 and parameter dictionary.
+
+    If context is FILTERED, injects:
+        AND CIRCLE_CODE IN (:c_0, :c_1, ...)
+    If context is ALL (or None), omits circle filtering to preserve nationwide behavior.
+    Excludes active in-flight references (via build_active_exclusion_predicate) to eliminate cleanup races.
+    Protects reconciliation-required records from being reset to N.
+    Preserves MODULE_TYPE = 'ESIM'.
+    """
+    bind_params: dict = {"stuck_minutes": stuck_minutes}
+    circle_predicate = ""
+
+    if context and context.mode == "FILTERED" and context.circle_codes:
+        placeholders = []
+        for idx, code in enumerate(context.circle_codes):
+            param_name = f"c_{idx}"
+            placeholders.append(f":{param_name}")
+            bind_params[param_name] = code
+        circle_predicate = f"  AND CIRCLE_CODE IN ({', '.join(placeholders)})\n"
+
+    exclusion_sql, exclusion_params = build_active_exclusion_predicate(
+        "ID", active_refs
+    )
+    bind_params.update(exclusion_params)
+
+    sql = f"""
+UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
+SET    AMOUNT_DEDUCT_FLAG    = 'N',
+       AMOUNT_DEDUCT_REMARKS = 'Reset: stuck in processing state'
+WHERE  AMOUNT_DEDUCT_FLAG    = 'P'
+  AND  MODULE_TYPE           = 'ESIM'
+  AND  AMOUNT_DEDUCT_DATE   IS NOT NULL
+  AND  AMOUNT_DEDUCT_DATE    < SYSDATE - (:stuck_minutes / 1440)
+  AND  (AMOUNT_DEDUCT_REMARKS IS NULL OR AMOUNT_DEDUCT_REMARKS NOT LIKE 'RECONCILIATION_REQUIRED%')
+{circle_predicate}{exclusion_sql}""".strip()
+
     return sql, bind_params
 
 
@@ -345,30 +389,36 @@ class EsimAdapter:
             )
 
     def reset_stuck_processing(
-        self, stuck_minutes: int, active_refs: Optional[Set[Any]] = None
+        self,
+        stuck_minutes: int,
+        context: Optional[ExecutionContext] = None,
+        active_refs: Optional[Set[Any]] = None,
     ) -> int:
-        
+        """Emergency reset: move stuck AMOUNT_DEDUCT_FLAG='P' records back to 'N'.
+
+        Scoped to the effective execution context (zone isolation).
+        Excludes in-flight active ownership references to prevent cleanup races.
+        Protects records requiring manual reconciliation from being reset.
+        Preserves MODULE_TYPE = 'ESIM'.
+        """
         if not self.enabled:
             return 0
+
+        if context is None:
+            context = ExecutionContext.create(
+                source=ExecutionSource.SCHEDULED,
+                service_type=self.service_type.lower(),
+            )
 
         if active_refs is None:
             active_refs = ownership_tracker.get_active(self.service_type)
 
-        exclusion_sql, exclusion_params = build_active_exclusion_predicate(
-            "ID", active_refs
+        sql, params = build_esim_cleanup_query(
+            stuck_minutes=stuck_minutes,
+            context=context,
+            active_refs=active_refs,
         )
 
-        sql = f"""
-            UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
-            SET    AMOUNT_DEDUCT_FLAG    = 'N',
-                   AMOUNT_DEDUCT_REMARKS = 'Reset: stuck in processing state'
-            WHERE  AMOUNT_DEDUCT_FLAG    = 'P'
-              AND  MODULE_TYPE           = 'ESIM'
-              AND  AMOUNT_DEDUCT_DATE   IS NOT NULL
-              AND  AMOUNT_DEDUCT_DATE    < SYSDATE - (:stuck_minutes / 1440)
-              AND  (AMOUNT_DEDUCT_REMARKS IS NULL OR AMOUNT_DEDUCT_REMARKS NOT LIKE 'RECONCILIATION_REQUIRED%')
-{exclusion_sql}        """.strip()
-        params = {"stuck_minutes": stuck_minutes, **exclusion_params}
         try:
             with get_oracle_conn() as conn:
                 cur = conn.cursor()
@@ -378,8 +428,8 @@ class EsimAdapter:
             if count:
                 logger.warning(
                     "[ESIM] reset_stuck_processing: reset %d stuck-P row(s) "
-                    "older than %d min back to N (excluded %d active in-flight)",
-                    count, stuck_minutes, len(active_refs),
+                    "older than %d min back to N (scope=%s, mode=%s, excluded %d active in-flight)",
+                    count, stuck_minutes, list(context.zone_codes), context.mode, len(active_refs),
                 )
             return count
         except Exception as exc:
