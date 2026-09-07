@@ -1,6 +1,7 @@
-from typing import List, Protocol, runtime_checkable
+from typing import List, Optional, Protocol, runtime_checkable
 
 from app.auth.token_manager import PyroAuthService
+from app.context import ExecutionContext
 
 
 @runtime_checkable
@@ -13,7 +14,9 @@ class DebitServiceAdapter(Protocol):
 
     # ── Data access ────────────────────────────────────────────────────────────
 
-    def fetch_and_claim(self, batch_size: int) -> List[dict]:
+    def fetch_and_claim(
+        self, batch_size: int, context: Optional[ExecutionContext] = None
+    ) -> List[dict]:
        
         ...
 

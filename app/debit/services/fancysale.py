@@ -1,7 +1,8 @@
 import logging
-from typing import List
+from typing import List, Optional, Tuple
 
 from app.auth.token_manager import PyroAuthService
+from app.context import ExecutionContext
 from app.db.oracle import get_oracle_conn
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,69 @@ VS_STATUS_QM = "QM"     # MPIN error — Sanchar Mitra sets; we re-pick after fi
 VS_STATUS_QB = "QB"     # Balance error — Sanchar Mitra sets; we re-pick after top-up
 
 FETCH_ELIGIBLE = (VS_STATUS_N, VS_STATUS_QM, VS_STATUS_QB)
+
+# ── Q002 Claim Query with exact REFID, status guard, and CIRCLE_CODE guard ─────
+FANCYSALE_CLAIM_SQL = """
+UPDATE CAF_ADMIN.VANITYSALE_FRANCH_DATA
+SET CAF_ENTRY_DONE = 'P',
+    CAF_ENTRY_DATE = SYSDATE,
+    PYRO_REMARKS = 'Processing started'
+WHERE REFID = :refid
+  AND CAF_ENTRY_DONE IN ('N','QM','QB')
+  AND CIRCLE_CODE = :circle_code
+""".strip()
+
+
+def build_fancysale_claim_query() -> str:
+    """Return Q002 claim query SQL text with circle guard."""
+    return FANCYSALE_CLAIM_SQL
+
+
+def build_fancysale_candidate_query(
+    batch_size: int,
+    context: Optional[ExecutionContext] = None,
+) -> Tuple[str, dict]:
+    """Construct candidate discovery query Q001 and parameter dictionary.
+
+    If context is FILTERED, injects:
+        AND CIRCLE_CODE IN (:c_0, :c_1, ...)
+    If context is ALL (or None), omits circle filtering to preserve nationwide behavior.
+    Preserves FIFO ordering (TRANS_DATE ASC).
+    """
+    bind_params: dict = {"batch_size": batch_size}
+    circle_predicate = ""
+
+    if context and context.mode == "FILTERED" and context.circle_codes:
+        placeholders = []
+        for idx, code in enumerate(context.circle_codes):
+            param_name = f"c_{idx}"
+            placeholders.append(f":{param_name}")
+            bind_params[param_name] = code
+        circle_predicate = f"  AND CIRCLE_CODE IN ({', '.join(placeholders)})\n"
+
+    sql = f"""
+SELECT *
+FROM (
+    SELECT
+        REFID,
+        CTOPUPNO,
+        FANCY_NO,
+        AMOUNT,
+        CAF_ADMIN.F_DECRYPT(MPIN) AS plain_mpin,
+        MPIN_LENGTH,
+        SS_REQUEST_ID,
+        CSCCODE,
+        CIRCLE_CODE,
+        TRANS_DATE,
+        MODULE_TYPE,
+        CAF_ENTRY_DONE
+    FROM CAF_ADMIN.VANITYSALE_FRANCH_DATA
+    WHERE CAF_ENTRY_DONE IN ('N', 'QM', 'QB')
+{circle_predicate}    ORDER BY TRANS_DATE ASC
+)
+WHERE ROWNUM <= :batch_size
+    """.strip()
+    return sql, bind_params
 
 
 class FancySaleAdapter:
@@ -38,47 +102,27 @@ class FancySaleAdapter:
 
     # ── Interface implementation ───────────────────────────────────────────────
 
-    def fetch_and_claim(self, batch_size: int) -> List[dict]:
+    def fetch_and_claim(
+        self,
+        batch_size: int,
+        context: Optional[ExecutionContext] = None,
+    ) -> List[dict]:
         
         if not self.enabled:
             return []
 
-        select_sql = """
-            SELECT *
-            FROM (
-                SELECT
-                    REFID,
-                    CTOPUPNO,
-                    FANCY_NO,
-                    AMOUNT,
-                    CAF_ADMIN.F_DECRYPT(MPIN) AS plain_mpin,
-                    MPIN_LENGTH,
-                    SS_REQUEST_ID,
-                    CSCCODE,
-                    CIRCLE_CODE,
-                    TRANS_DATE,
-                    MODULE_TYPE,
-                    CAF_ENTRY_DONE
-                FROM CAF_ADMIN.VANITYSALE_FRANCH_DATA
-                WHERE CAF_ENTRY_DONE IN ('N', 'QM', 'QB')
-                ORDER BY TRANS_DATE ASC
-            )
-            WHERE ROWNUM <= :batch_size
-        """
+        ctx = context if context is not None else ExecutionContext.create(
+            source="SCHEDULED",
+            service_type=self.service_type,
+        )
 
-        claim_sql = """
-            UPDATE CAF_ADMIN.VANITYSALE_FRANCH_DATA
-            SET    CAF_ENTRY_DONE = 'P',
-                   CAF_ENTRY_DATE = SYSDATE,
-                   PYRO_REMARKS   = 'Processing started'
-            WHERE  REFID          = :refid
-              AND  CAF_ENTRY_DONE IN ('N', 'QM', 'QB')
-        """
+        select_sql, bind_params = build_fancysale_candidate_query(batch_size, ctx)
+        claim_sql = build_fancysale_claim_query()
 
         with get_oracle_conn() as conn:
             cur = conn.cursor()
 
-            cur.execute(select_sql, batch_size=batch_size)
+            cur.execute(select_sql, bind_params)
             cols = [c[0].lower() for c in cur.description]
             candidates = [dict(zip(cols, row)) for row in cur.fetchall()]
 
@@ -87,20 +131,40 @@ class FancySaleAdapter:
 
             claimed = []
             for row in candidates:
-                cur.execute(claim_sql, {"refid": row["refid"]})
+                circle_code = row.get("circle_code")
+                # Defense-in-depth: skip row if circle not permitted in this context
+                if not ctx.is_circle_allowed(circle_code):
+                    logger.warning(
+                        "[FANCYSALE] Candidate REFID=%s has circle_code=%s disallowed in %s mode",
+                        row.get("refid"), circle_code, ctx.mode,
+                    )
+                    continue
+
+                cur.execute(claim_sql, {
+                    "refid": row["refid"],
+                    "circle_code": circle_code,
+                })
                 if cur.rowcount == 1:
                     claimed.append(row)
+                elif cur.rowcount > 1:
+                    logger.critical(
+                        "[FANCYSALE] Critical identity anomaly: REFID=%s modified %d rows (expected 1). Discarding claim.",
+                        row["refid"], cur.rowcount,
+                    )
 
             conn.commit()
 
         if len(claimed) < len(candidates):
             logger.warning(
-                "[FANCYSALE] fetch_and_claim: %d candidate(s) found, %d claimed "
-                "(%d lost to concurrent worker)",
-                len(candidates), len(claimed), len(candidates) - len(claimed),
+                "[FANCYSALE] fetch_and_claim [%s]: %d candidate(s) found, %d claimed "
+                "(%d lost to concurrent worker or skipped)",
+                ctx.execution_id[:8], len(candidates), len(claimed), len(candidates) - len(claimed),
             )
         else:
-            logger.info("[FANCYSALE] fetch_and_claim: %d row(s) claimed", len(claimed))
+            logger.info(
+                "[FANCYSALE] fetch_and_claim [%s]: %d row(s) claimed (mode=%s, zones=%s)",
+                ctx.execution_id[:8], len(claimed), ctx.mode, ctx.zones_display,
+            )
         return claimed
 
     def map_to_pyro_params(self, record: dict) -> dict:

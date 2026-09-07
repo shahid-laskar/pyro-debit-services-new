@@ -1,6 +1,9 @@
 import asyncio
 import logging
 
+from typing import Optional
+
+from app.context import ExecutionContext
 from app.db.debit_log import async_insert_debit_txn_log
 from app.debit.pyro_client import DEBIT_SUCCESS_CODE, wallet_adjustment
 from app.debit.services.base import DebitServiceAdapter
@@ -8,7 +11,10 @@ from app.debit.services.base import DebitServiceAdapter
 logger = logging.getLogger(__name__)
 
 
-async def run_debit_batch(adapter: DebitServiceAdapter) -> dict:
+async def run_debit_batch(
+    adapter: DebitServiceAdapter,
+    context: Optional[ExecutionContext] = None,
+) -> dict:
     
     svc = adapter.service_type
 
@@ -17,7 +23,7 @@ async def run_debit_batch(adapter: DebitServiceAdapter) -> dict:
         return {"service_type": svc, "processed": 0, "success": 0, "failed": 0}
 
     # ── 1. Claim eligible records ─────────────────────────────────────────────
-    records = await asyncio.to_thread(adapter.fetch_and_claim, adapter.batch_size)
+    records = await asyncio.to_thread(adapter.fetch_and_claim, adapter.batch_size, context)
 
     if not records:
         logger.info("[%s] Debit processor: no eligible records", svc)
