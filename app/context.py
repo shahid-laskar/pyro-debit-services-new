@@ -138,6 +138,11 @@ class ExecutionContext:
         """Comma-delimited string of active zone codes."""
         return ",".join(self.zone_codes)
 
+    @property
+    def circle_count(self) -> int:
+        """Return count of active circles in this context (nationwide total if ALL mode)."""
+        return len(self.circle_codes) if self.circle_codes is not None else len(CIRCLE_METADATA)
+
     def to_dict(self) -> dict:
         """Serialize context for logging, telemetry, and API responses."""
         return {

@@ -30,14 +30,34 @@ async def _debit_job(service_type: str):
             logger.info("Scheduler: [%s] debit service disabled — skipping", service_type)
             return
 
+        # Construct effective execution context using settings.enabled_zones (Phase 14)
         context = ExecutionContext.create(
             source=ExecutionSource.SCHEDULED,
+            zones_str=settings.enabled_zones,
             service_type=service_type.lower(),
         )
-        summary = await run_debit_batch(adapter, context=context)
+
         logger.info(
-            "Scheduler: [%s] debit done (scope=%s) -- %s",
-            service_type, list(context.zone_codes), summary,
+            "Scheduler: [%s] debit starting — execution_id=%s service_type=%s source=SCHEDULED zones=%s circle_count=%d mode=%s",
+            service_type,
+            context.execution_id,
+            service_type,
+            context.zones_display,
+            context.circle_count,
+            context.mode,
+        )
+
+        summary = await run_debit_batch(adapter, context=context)
+
+        logger.info(
+            "Scheduler: [%s] debit done — execution_id=%s service_type=%s source=SCHEDULED zones=%s circle_count=%d mode=%s summary=%s",
+            service_type,
+            context.execution_id,
+            service_type,
+            context.zones_display,
+            context.circle_count,
+            context.mode,
+            summary,
         )
     except Exception as exc:
         logger.error("Scheduler: [%s] debit exception: %s", service_type, exc)
@@ -49,20 +69,40 @@ async def _stuck_cleanup_job():
         from app.context import ExecutionContext, ExecutionSource
         from app.debit.services.registry import get_enabled_services
         for adapter in get_enabled_services():
+            # Construct effective execution context using settings.enabled_zones (Phase 14)
             context = ExecutionContext.create(
                 source=ExecutionSource.SCHEDULED,
+                zones_str=settings.enabled_zones,
                 service_type=adapter.service_type.lower(),
             )
+
+            logger.info(
+                "Scheduler: [%s] cleanup starting — execution_id=%s service_type=%s source=SCHEDULED zones=%s circle_count=%d mode=%s stuck_minutes=%d",
+                adapter.service_type,
+                context.execution_id,
+                adapter.service_type,
+                context.zones_display,
+                context.circle_count,
+                context.mode,
+                adapter.stuck_minutes,
+            )
+
             count = await asyncio.to_thread(
                 adapter.reset_stuck_processing,
                 adapter.stuck_minutes,
                 context=context,
             )
-            if count:
-                logger.info(
-                    "Scheduler: [%s] reset %d stuck-P row(s) (scope=%s)",
-                    adapter.service_type, count, list(context.zone_codes),
-                )
+
+            logger.info(
+                "Scheduler: [%s] cleanup done — execution_id=%s service_type=%s source=SCHEDULED zones=%s circle_count=%d mode=%s reset_count=%d",
+                adapter.service_type,
+                context.execution_id,
+                adapter.service_type,
+                context.zones_display,
+                context.circle_count,
+                context.mode,
+                count,
+            )
     except Exception as exc:
         logger.error("Scheduler: debit stuck cleanup exception: %s", exc)
 
@@ -132,8 +172,9 @@ def start_scheduler():
 
     scheduler.start()
     logger.info(
-        "Scheduler started — stuck_cleanup: every 15min (startup=%s) | "
+        "Scheduler started — configured_zones: %s | stuck_cleanup: every 15min (startup=%s) | "
         "debit_daily_auth: 00:10",
+        settings.enabled_zones,
         settings.run_cleanup_on_startup,
     )
 
