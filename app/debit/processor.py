@@ -1,3 +1,25 @@
+"""Debit Processor Concurrency & Orchestration Module (Phase 13).
+
+Architecture & Concurrency Design:
+- Each debit service (FANCYSALE, SIMSWAP, ESIM) has a dedicated execution lock to prevent
+  overlapping batch executions between scheduled background jobs (APScheduler) and manual
+  operator triggers (POST /admin/trigger-debit/{service_type}).
+- Lock implementation: asyncio.Lock managed per canonical (uppercase) service type.
+
+CRITICAL ARCHITECTURAL LIMITATION:
+- An asyncio.Lock is STRICTLY PROCESS-LOCAL (tied to the memory space of a single Python event loop).
+- Current Deployment Topology: Exactly one Uvicorn worker in one container instance.
+  In this single-process deployment, asyncio.Lock completely prevents scheduler and manual trigger overlap.
+- Future Scale-Out Constraint:
+  If the application is scaled out to multiple Uvicorn worker processes (e.g. `uvicorn --workers N`)
+  or across multiple container replicas / Kubernetes pods, asyncio.Lock WILL NOT provide distributed
+  mutual exclusion across processes or nodes.
+- Scale-Out Remediation:
+  Before scaling beyond a single worker process/container, replace or augment this mechanism with
+  a distributed locking system, such as PostgreSQL transaction/session advisory locks
+  (`pg_try_advisory_lock(hashtext(service_type))`) or a Redis-based distributed lock (Redlock).
+"""
+
 import asyncio
 import logging
 from typing import Optional
@@ -15,12 +37,34 @@ _SERVICE_LOCKS: dict[str, asyncio.Lock] = {}
 _SERVICE_LOCKS_GUARD = asyncio.Lock()
 
 
-async def _get_service_lock(service_type: str) -> asyncio.Lock:
-    """Retrieve or create an asyncio.Lock for the specified service type."""
+async def get_service_lock(service_type: str) -> asyncio.Lock:
+    """Retrieve or create an asyncio.Lock for the specified service type.
+
+    Normalizes service_type to uppercase to prevent case variations from evading lock mutual exclusion.
+    Thread-safe and coroutine-safe initialization via _SERVICE_LOCKS_GUARD.
+
+    NOTE: This lock is process-local. Refer to module docstring for multi-worker/multi-replica limitations.
+    """
+    canonical_type = service_type.strip().upper()
     async with _SERVICE_LOCKS_GUARD:
-        if service_type not in _SERVICE_LOCKS:
-            _SERVICE_LOCKS[service_type] = asyncio.Lock()
-        return _SERVICE_LOCKS[service_type]
+        if canonical_type not in _SERVICE_LOCKS:
+            _SERVICE_LOCKS[canonical_type] = asyncio.Lock()
+        return _SERVICE_LOCKS[canonical_type]
+
+
+async def is_service_locked(service_type: str) -> bool:
+    """Return True if the service lock is currently acquired by an active batch."""
+    lock = await get_service_lock(service_type)
+    return lock.locked()
+
+
+def _reset_service_locks() -> None:
+    """Internal test fixture helper to clear lock state between unit tests."""
+    _SERVICE_LOCKS.clear()
+
+
+# Alias for backwards compatibility
+_get_service_lock = get_service_lock
 
 
 async def run_debit_batch(
@@ -34,8 +78,17 @@ async def run_debit_batch(
         logger.info("[%s] Debit service disabled — skipping batch", svc)
         return {"service_type": svc, "processed": 0, "success": 0, "failed": 0, "reconciliation_required": 0}
 
-    lock = await _get_service_lock(svc)
+    lock = await get_service_lock(svc)
+    was_locked = lock.locked()
+    if was_locked:
+        logger.warning(
+            "[%s] Debit batch already in progress (locked) — waiting for active batch to release lock",
+            svc,
+        )
+
     async with lock:
+        if was_locked:
+            logger.info("[%s] Lock acquired after waiting — proceeding with batch", svc)
         # ── 1. Claim eligible records ─────────────────────────────────────────
         records = await asyncio.to_thread(adapter.fetch_and_claim, adapter.batch_size, context)
 
@@ -172,6 +225,7 @@ async def run_debit_batch(
                 "success":                 success,
                 "failed":                  failed,
                 "reconciliation_required": reconciliation_count,
+                "execution_id":            context.execution_id if context else None,
             }
             logger.info("[%s] Debit batch complete — %s", svc, summary)
             return summary
