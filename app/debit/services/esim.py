@@ -133,6 +133,75 @@ WHERE  AMOUNT_DEDUCT_FLAG    = 'P'
     return sql, bind_params
 
 
+def build_esim_sim_swap_data_update_query(record: dict) -> Tuple[str, dict]:
+    """Construct secondary writeback query Q015 for CAF_ADMIN.SIM_SWAP_DATA.
+
+    Hardened according to Phase 11 requirements:
+    - SIM_SWAP_DATA primary key is ID, with composite lookup index beginning with
+      (GSMNUMBER, NEW_SIM, CAF_SERIAL_NO, SWAP_DATE).
+    - If record contains 'sim_swap_id' (or 'swap_id'), binds ID = :sim_swap_id
+      for exact primary key targeting.
+    - If record contains 'caf_serial_no' (or 'caf_no'), binds CAF_SERIAL_NO = :caf_serial_no
+      for exact composite targeting.
+    - If record contains 'new_sim', binds NEW_SIM = :new_sim.
+    - If record contains 'circle_code', binds CIRCLE_CODE = :circle_code to isolate mutations
+      to the subscriber's circle and prevent modifying unrelated records for the same GSM.
+    - Preserves ACTIVATION_STATUS = 'IF' guard.
+    """
+    raw_gsm = record.get("gsmnumber")
+    if raw_gsm is None:
+        raise ValueError(
+            f"ID={record.get('id', 'UNKNOWN')}: ESIM record missing required 'gsmnumber' for SIM_SWAP_DATA writeback"
+        )
+    gsmnumber = str(raw_gsm).strip()
+    if not gsmnumber:
+        raise ValueError(
+            f"ID={record.get('id', 'UNKNOWN')}: ESIM record has empty 'gsmnumber' for SIM_SWAP_DATA writeback"
+        )
+
+    params: dict = {"gsmnumber": gsmnumber}
+    extra_predicates: list[str] = []
+
+    sim_swap_id = record.get("sim_swap_id") or record.get("swap_id")
+    if sim_swap_id is not None and str(sim_swap_id).strip():
+        try:
+            params["sim_swap_id"] = int(sim_swap_id)
+        except (ValueError, TypeError):
+            params["sim_swap_id"] = str(sim_swap_id).strip()
+        extra_predicates.append("  AND  ID                = :sim_swap_id")
+
+    caf_serial_no = record.get("caf_serial_no") or record.get("caf_no")
+    if caf_serial_no is not None and str(caf_serial_no).strip():
+        params["caf_serial_no"] = str(caf_serial_no).strip()
+        extra_predicates.append("  AND  CAF_SERIAL_NO     = :caf_serial_no")
+
+    new_sim = record.get("new_sim")
+    if new_sim is not None and str(new_sim).strip():
+        params["new_sim"] = str(new_sim).strip()
+        extra_predicates.append("  AND  NEW_SIM           = :new_sim")
+
+    circle_code = record.get("circle_code")
+    if circle_code is not None and str(circle_code).strip():
+        try:
+            params["circle_code"] = int(circle_code)
+        except (ValueError, TypeError):
+            params["circle_code"] = str(circle_code).strip()
+        extra_predicates.append("  AND  CIRCLE_CODE       = :circle_code")
+
+    extra_sql = "\n".join(extra_predicates)
+    if extra_sql:
+        extra_sql = "\n" + extra_sql
+
+    sql = f"""
+UPDATE CAF_ADMIN.SIM_SWAP_DATA
+SET    ACTIVATION_STATUS = 'AI'
+WHERE  GSMNUMBER         = :gsmnumber{extra_sql}
+  AND  ACTIVATION_STATUS = 'IF'
+""".strip()
+
+    return sql, params
+
+
 class EsimAdapter:    
 
     service_type = "ESIM"
@@ -304,36 +373,38 @@ class EsimAdapter:
             ) from exc
 
         # ── Phase 2: secondary writeback — CAF_ADMIN.SIM_SWAP_DATA ───────────
-        secondary_sql = """
-            UPDATE CAF_ADMIN.SIM_SWAP_DATA
-            SET    ACTIVATION_STATUS = 'AI'
-            WHERE  GSMNUMBER         = :gsmnumber
-              AND  ACTIVATION_STATUS = 'IF'
-        """
         try:
+            secondary_sql, secondary_params = build_esim_sim_swap_data_update_query(record)
             with get_oracle_conn() as conn:
                 cur = conn.cursor()
-                cur.execute(secondary_sql, {"gsmnumber": gsmnumber})
+                cur.execute(secondary_sql, secondary_params)
                 if cur.rowcount == 0:
                     logger.warning(
                         "[ESIM] mark_success secondary (SIM_SWAP_DATA): no row updated for "
-                        "GSMNUMBER=%s — row may be absent or ACTIVATION_STATUS != 'IF'. "
+                        "GSMNUMBER=%s (params=%s) — row may be absent or ACTIVATION_STATUS != 'IF'. "
                         "Primary record ID=%s already marked Y. Check SIM_SWAP_DATA manually if needed.",
-                        gsmnumber, record_id,
+                        gsmnumber, secondary_params, record_id,
                     )
                 else:
-                    logger.info(
-                        "[ESIM] mark_success secondary (SIM_SWAP_DATA): "
-                        "ACTIVATION_STATUS set to AI for GSMNUMBER=%s (ID=%s)",
-                        gsmnumber, record_id,
-                    )
+                    if cur.rowcount > 1:
+                        logger.warning(
+                            "[ESIM] mark_success secondary (SIM_SWAP_DATA): %d rows updated for GSMNUMBER=%s "
+                            "(params=%s, ID=%s) — expected at most 1 row",
+                            cur.rowcount, gsmnumber, secondary_params, record_id,
+                        )
+                    else:
+                        logger.info(
+                            "[ESIM] mark_success secondary (SIM_SWAP_DATA): "
+                            "ACTIVATION_STATUS set to AI for GSMNUMBER=%s (params=%s, ID=%s)",
+                            gsmnumber, secondary_params, record_id,
+                        )
                 conn.commit()
         except Exception as exc:
             logger.error(
                 "[ESIM] mark_success secondary (SIM_SWAP_DATA) DB failure — "
                 "MANUAL FIX REQUIRED: set CAF_ADMIN.SIM_SWAP_DATA.ACTIVATION_STATUS = 'AI' "
-                "WHERE GSMNUMBER = '%s'. Primary record ID=%s is already Y. Error: %s",
-                gsmnumber, record_id, exc,
+                "WHERE GSMNUMBER = '%s' (record ID=%s). Primary record ID=%s is already Y. Error: %s",
+                gsmnumber, record_id, record_id, exc,
             )
 
     def mark_reconciliation_required(
