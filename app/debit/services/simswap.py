@@ -133,6 +133,58 @@ WHERE  AMOUNT_DEDUCT_FLAG    = 'P'
     return sql, bind_params
 
 
+def build_simswap_bcd_update_query(record: dict) -> Tuple[str, dict]:
+    """Construct secondary writeback query Q009 for CAF_ADMIN.BCD.
+
+    Hardened according to Phase 10 requirements:
+    - BCD confirmed composite primary key is (GSMNUMBER, CAF_SERIAL_NO).
+    - If record contains 'caf_serial_no' (or 'caf_no'), binds CAF_SERIAL_NO = :caf_serial_no
+      for exact composite PK targeting.
+    - If record contains 'circle_code', binds CIRCLE_CODE = :circle_code to isolate mutations
+      to the subscriber's circle and prevent modifying unrelated BCD records for the same GSM.
+    - Preserves ACTIVATION_STATUS = 'IF' guard.
+    """
+    raw_gsm = record.get("gsmnumber")
+    if raw_gsm is None:
+        raise ValueError(
+            f"ID={record.get('id', 'UNKNOWN')}: SimSwap record missing required 'gsmnumber' for BCD writeback"
+        )
+    gsmnumber = str(raw_gsm).strip()
+    if not gsmnumber:
+        raise ValueError(
+            f"ID={record.get('id', 'UNKNOWN')}: SimSwap record has empty 'gsmnumber' for BCD writeback"
+        )
+
+    params: dict = {"gsmnumber": gsmnumber}
+    extra_predicates: list[str] = []
+
+    caf_serial_no = record.get("caf_serial_no") or record.get("caf_no")
+    if caf_serial_no is not None and str(caf_serial_no).strip():
+        params["caf_serial_no"] = str(caf_serial_no).strip()
+        extra_predicates.append("  AND  CAF_SERIAL_NO     = :caf_serial_no")
+
+    circle_code = record.get("circle_code")
+    if circle_code is not None and str(circle_code).strip():
+        try:
+            params["circle_code"] = int(circle_code)
+        except (ValueError, TypeError):
+            params["circle_code"] = str(circle_code).strip()
+        extra_predicates.append("  AND  CIRCLE_CODE       = :circle_code")
+
+    extra_sql = "\n".join(extra_predicates)
+    if extra_sql:
+        extra_sql = "\n" + extra_sql
+
+    sql = f"""
+UPDATE CAF_ADMIN.BCD
+SET    ACTIVATION_STATUS = 'AI'
+WHERE  GSMNUMBER         = :gsmnumber{extra_sql}
+  AND  ACTIVATION_STATUS = 'IF'
+""".strip()
+
+    return sql, params
+
+
 class SimswapAdapter:
   
     service_type = "SIMSWAP"
@@ -304,36 +356,38 @@ class SimswapAdapter:
             ) from exc
 
         # ── Phase 2: secondary writeback — CAF_ADMIN.BCD ─────────────────────
-        secondary_sql = """
-            UPDATE CAF_ADMIN.BCD
-            SET    ACTIVATION_STATUS = 'AI'
-            WHERE  GSMNUMBER         = :gsmnumber
-              AND  ACTIVATION_STATUS = 'IF'
-        """
         try:
+            secondary_sql, secondary_params = build_simswap_bcd_update_query(record)
             with get_oracle_conn() as conn:
                 cur = conn.cursor()
-                cur.execute(secondary_sql, {"gsmnumber": gsmnumber})
+                cur.execute(secondary_sql, secondary_params)
                 if cur.rowcount == 0:
                     logger.warning(
                         "[SIMSWAP] mark_success secondary (BCD): no row updated for "
-                        "GSMNUMBER=%s — row may be absent or ACTIVATION_STATUS != 'IF'. "
+                        "GSMNUMBER=%s (params=%s) — row may be absent or ACTIVATION_STATUS != 'IF'. "
                         "Primary record ID=%s already marked Y. Check BCD manually if needed.",
-                        gsmnumber, record_id,
+                        gsmnumber, secondary_params, record_id,
                     )
                 else:
-                    logger.info(
-                        "[SIMSWAP] mark_success secondary (BCD): "
-                        "ACTIVATION_STATUS set to AI for GSMNUMBER=%s (ID=%s)",
-                        gsmnumber, record_id,
-                    )
+                    if cur.rowcount > 1:
+                        logger.warning(
+                            "[SIMSWAP] mark_success secondary (BCD): %d rows updated for GSMNUMBER=%s "
+                            "(params=%s, ID=%s) — expected at most 1 row",
+                            cur.rowcount, gsmnumber, secondary_params, record_id,
+                        )
+                    else:
+                        logger.info(
+                            "[SIMSWAP] mark_success secondary (BCD): "
+                            "ACTIVATION_STATUS set to AI for GSMNUMBER=%s (params=%s, ID=%s)",
+                            gsmnumber, secondary_params, record_id,
+                        )
                 conn.commit()
         except Exception as exc:
             logger.error(
                 "[SIMSWAP] mark_success secondary (BCD) DB failure — "
                 "MANUAL FIX REQUIRED: set CAF_ADMIN.BCD.ACTIVATION_STATUS = 'AI' "
-                "WHERE GSMNUMBER = '%s'. Primary record ID=%s is already Y. Error: %s",
-                gsmnumber, record_id, exc,
+                "WHERE GSMNUMBER = '%s' (record ID=%s). Primary record ID=%s is already Y. Error: %s",
+                gsmnumber, record_id, record_id, exc,
             )
 
     def mark_reconciliation_required(
