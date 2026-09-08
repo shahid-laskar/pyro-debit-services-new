@@ -2,9 +2,10 @@
 
 Endpoints
 ─────────
-GET  /debit/status                          — token status for all 3 debit TMs
-POST /admin/trigger-debit/{service_type}    — manual batch run for one service
-POST /admin/reset-stuck-debit/{service_type}— emergency: reset ALL P rows for service
+GET  /debit/status                           — token status for all 3 debit TMs (Admin protected)
+GET  /admin/zones                            — active zone configuration & resolved circles
+POST /admin/trigger-debit/{service_type}     — manual batch run for one service
+POST /admin/reset-stuck-debit/{service_type} — emergency: reset ALL P rows for service
 """
 
 import asyncio
@@ -22,7 +23,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/debit/status", tags=["Debit"])
+@router.get(
+    "/debit/status",
+    tags=["Debit"],
+    dependencies=[Depends(require_admin_api_key)],
+)
 async def debit_status():
     
     from app.debit.services.registry import SERVICE_REGISTRY
@@ -47,6 +52,38 @@ async def debit_status():
     return {
         "tokens":   token_statuses,
         "services": service_statuses,
+    }
+
+
+@router.get(
+    "/admin/zones",
+    tags=["Admin"],
+    dependencies=[Depends(require_admin_api_key)],
+)
+async def get_zones_metadata():
+    """Inspect active zone configuration, mode, and resolved circles."""
+    from app.zones import CIRCLE_METADATA, InvalidZoneError, resolve_zones
+
+    try:
+        selection = resolve_zones(settings.enabled_zones)
+    except InvalidZoneError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Configured enabled_zones '{settings.enabled_zones}' is invalid: {exc}",
+        )
+
+    active_circles = (
+        list(selection.circle_codes)
+        if selection.circle_codes is not None
+        else sorted(CIRCLE_METADATA.keys())
+    )
+
+    return {
+        "configured_zones": settings.enabled_zones,
+        "active_zone_codes": list(selection.zone_codes),
+        "mode": selection.mode,
+        "active_circle_count": len(active_circles),
+        "active_circles": active_circles,
     }
 
 
@@ -85,17 +122,20 @@ async def trigger_debit(
         raise HTTPException(status_code=400, detail=str(exc))
 
     logger.info(
-        "[ADMIN] trigger_debit invoked for %s: requested_zones=%s, effective_zones=%s, configured_zones=%s, mode=%s",
+        "[ADMIN] trigger_debit invoked for %s: execution_id=%s, requested_zones=%s, effective_zones=%s, configured_zones=%s, mode=%s, circle_count=%d",
         service_type,
+        context.execution_id,
         zones,
         list(context.zone_codes),
         settings.enabled_zones,
         context.mode,
+        context.circle_count,
     )
 
     summary = await run_debit_batch(adapter, context=context)
     return {
         "triggered": True,
+        "execution_id": context.execution_id,
         "requested_zones": zones,
         "effective_zones": list(context.zone_codes),
         "configured_zones": settings.enabled_zones,
@@ -154,13 +194,15 @@ async def reset_stuck_debit(
     effective_minutes = stuck_minutes if stuck_minutes is not None else adapter.stuck_minutes
 
     logger.warning(
-        "[ADMIN_AUDIT] reset_stuck_debit invoked for %s: stuck_minutes=%d, requested_zones=%s, effective_zones=%s, configured_zones=%s, mode=%s",
+        "[ADMIN_AUDIT] reset_stuck_debit invoked for %s: execution_id=%s, stuck_minutes=%d, requested_zones=%s, effective_zones=%s, configured_zones=%s, mode=%s, circle_count=%d",
         service_type,
+        context.execution_id,
         effective_minutes,
         zones,
         list(context.zone_codes),
         settings.enabled_zones,
         context.mode,
+        context.circle_count,
     )
 
     count = await asyncio.to_thread(
@@ -170,6 +212,7 @@ async def reset_stuck_debit(
     )
     return {
         "service_type":       service_type,
+        "execution_id":       context.execution_id,
         "stuck_minutes_used": effective_minutes,
         "requested_zones":    zones,
         "effective_zones":    list(context.zone_codes),
