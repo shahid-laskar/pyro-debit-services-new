@@ -11,10 +11,18 @@ logger = logging.getLogger(__name__)
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+SENSITIVE_KEYS = {
+    "mpin", "password", "api_key", "apikey", "jwt",
+    "token", "access_token", "session_token", "secret", "secret_key",
+}
+
+
 def _mask_debit_body(body: dict) -> str:
+    """Mask sensitive fields before persistence in transaction audit log."""
     masked = body.copy()
-    if "mpin" in masked:
-        masked["mpin"] = "***"
+    for k in list(masked.keys()):
+        if k.lower() in SENSITIVE_KEYS:
+            masked[k] = "***"
     return json.dumps(masked)
 
 
