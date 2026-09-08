@@ -12,3 +12,4 @@ nginx/ssl/*.pem
 .DS_Store
 *.tar.*
 *.tar.gz
+images/
