@@ -31,6 +31,38 @@ WHERE ID = :id
   AND AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB')
 """.strip()
 
+# ── Q008 Primary Success Writeback Query with exact ID, module guard, and status guard ──────────
+SIMSWAP_PRIMARY_SUCCESS_SQL = """
+UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
+SET    AMOUNT_DEDUCT_FLAG    = 'Y',
+       TRANSACTION_ID        = :pyro_txn_id,
+       AMOUNT_DEDUCT_DATE    = SYSDATE,
+       AMOUNT_DEDUCT_REMARKS = :remarks
+WHERE  ID                    = :id
+  AND  MODULE_TYPE           = 'SIMSWAP'
+  AND  AMOUNT_DEDUCT_FLAG    = 'P'
+""".strip()
+
+# ── Emergency Reconciliation Writeback Query with exact ID, module guard, and status guard ─────
+SIMSWAP_RECONCILIATION_SQL = """
+UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
+SET    AMOUNT_DEDUCT_REMARKS = :remarks
+WHERE  ID                    = :id
+  AND  MODULE_TYPE           = 'SIMSWAP'
+  AND  AMOUNT_DEDUCT_FLAG    = 'P'
+""".strip()
+
+# ── Q010 Failure Writeback Query with exact ID, module guard, and status guard ─────────────────
+SIMSWAP_FAILURE_SQL = """
+UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
+SET    AMOUNT_DEDUCT_FLAG    = 'R',
+       AMOUNT_DEDUCT_DATE    = SYSDATE,
+       AMOUNT_DEDUCT_REMARKS = :remarks
+WHERE  ID                    = :id
+  AND  MODULE_TYPE           = 'SIMSWAP'
+  AND  AMOUNT_DEDUCT_FLAG    = 'P'
+""".strip()
+
 
 def build_simswap_claim_query() -> str:
     """Return Q007 claim query SQL text with circle guard and PK."""
@@ -322,15 +354,7 @@ class SimswapAdapter:
         gsmnumber = str(record.get("gsmnumber") or "").strip()
 
         # ── Phase 1: primary writeback ────────────────────────────────────────
-        primary_sql = """
-            UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
-            SET    AMOUNT_DEDUCT_FLAG    = 'Y',
-                   TRANSACTION_ID        = :pyro_txn_id,
-                   AMOUNT_DEDUCT_DATE    = SYSDATE,
-                   AMOUNT_DEDUCT_REMARKS = :remarks
-            WHERE  ID                    = :id
-              AND  AMOUNT_DEDUCT_FLAG    = 'P'
-        """
+        primary_sql = SIMSWAP_PRIMARY_SUCCESS_SQL
         try:
             with get_oracle_conn() as conn:
                 cur = conn.cursor()
@@ -394,12 +418,7 @@ class SimswapAdapter:
         self, record: dict, pyro_txn_id: str, error_detail: str
     ) -> None:
         """Emergency update to mark record in Oracle as requiring reconciliation, preventing cleanup reset."""
-        sql = """
-            UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
-            SET    AMOUNT_DEDUCT_REMARKS = :remarks
-            WHERE  ID                    = :id
-              AND  AMOUNT_DEDUCT_FLAG    = 'P'
-        """
+        sql = SIMSWAP_RECONCILIATION_SQL
         remarks = f"RECONCILIATION_REQUIRED pyroId={pyro_txn_id}: {error_detail}"[:200]
         try:
             with get_oracle_conn() as conn:
@@ -415,14 +434,7 @@ class SimswapAdapter:
 
     def mark_failed(self, record: dict, remarks: str) -> None:
        
-        sql = """
-            UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
-            SET    AMOUNT_DEDUCT_FLAG    = 'R',
-                   AMOUNT_DEDUCT_DATE    = SYSDATE,
-                   AMOUNT_DEDUCT_REMARKS = :remarks
-            WHERE  ID                    = :id
-              AND  AMOUNT_DEDUCT_FLAG    = 'P'
-        """
+        sql = SIMSWAP_FAILURE_SQL
         try:
             with get_oracle_conn() as conn:
                 cur = conn.cursor()

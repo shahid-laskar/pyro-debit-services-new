@@ -31,6 +31,38 @@ WHERE ID = :id
   AND AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB')
 """.strip()
 
+# ── Q014 Primary Success Writeback Query with exact ID, module guard, and status guard ──────────
+ESIM_PRIMARY_SUCCESS_SQL = """
+UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
+SET    AMOUNT_DEDUCT_FLAG    = 'Y',
+       TRANSACTION_ID        = :pyro_txn_id,
+       AMOUNT_DEDUCT_DATE    = SYSDATE,
+       AMOUNT_DEDUCT_REMARKS = :remarks
+WHERE  ID                    = :id
+  AND  MODULE_TYPE           = 'ESIM'
+  AND  AMOUNT_DEDUCT_FLAG    = 'P'
+""".strip()
+
+# ── Emergency Reconciliation Writeback Query with exact ID, module guard, and status guard ─────
+ESIM_RECONCILIATION_SQL = """
+UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
+SET    AMOUNT_DEDUCT_REMARKS = :remarks
+WHERE  ID                    = :id
+  AND  MODULE_TYPE           = 'ESIM'
+  AND  AMOUNT_DEDUCT_FLAG    = 'P'
+""".strip()
+
+# ── Q016 Failure Writeback Query with exact ID, module guard, and status guard ─────────────────
+ESIM_FAILURE_SQL = """
+UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
+SET    AMOUNT_DEDUCT_FLAG    = 'R',
+       AMOUNT_DEDUCT_DATE    = SYSDATE,
+       AMOUNT_DEDUCT_REMARKS = :remarks
+WHERE  ID                    = :id
+  AND  MODULE_TYPE           = 'ESIM'
+  AND  AMOUNT_DEDUCT_FLAG    = 'P'
+""".strip()
+
 
 def build_esim_claim_query() -> str:
     """Return Q013 claim query SQL text with circle guard and PK."""
@@ -339,15 +371,7 @@ class EsimAdapter:
         gsmnumber = str(record.get("gsmnumber") or "").strip()
 
         # ── Phase 1: primary writeback ────────────────────────────────────────
-        primary_sql = """
-            UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
-            SET    AMOUNT_DEDUCT_FLAG    = 'Y',
-                   TRANSACTION_ID        = :pyro_txn_id,
-                   AMOUNT_DEDUCT_DATE    = SYSDATE,
-                   AMOUNT_DEDUCT_REMARKS = :remarks
-            WHERE  ID                    = :id
-              AND  AMOUNT_DEDUCT_FLAG    = 'P'
-        """
+        primary_sql = ESIM_PRIMARY_SUCCESS_SQL
         try:
             with get_oracle_conn() as conn:
                 cur = conn.cursor()
@@ -411,12 +435,7 @@ class EsimAdapter:
         self, record: dict, pyro_txn_id: str, error_detail: str
     ) -> None:
         """Emergency update to mark record in Oracle as requiring reconciliation, preventing cleanup reset."""
-        sql = """
-            UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
-            SET    AMOUNT_DEDUCT_REMARKS = :remarks
-            WHERE  ID                    = :id
-              AND  AMOUNT_DEDUCT_FLAG    = 'P'
-        """
+        sql = ESIM_RECONCILIATION_SQL
         remarks = f"RECONCILIATION_REQUIRED pyroId={pyro_txn_id}: {error_detail}"[:200]
         try:
             with get_oracle_conn() as conn:
@@ -432,14 +451,7 @@ class EsimAdapter:
 
     def mark_failed(self, record: dict, remarks: str) -> None:
         """Flip AMOUNT_DEDUCT_FLAG → R and record AMOUNT_DEDUCT_REMARKS."""
-        sql = """
-            UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
-            SET    AMOUNT_DEDUCT_FLAG    = 'R',
-                   AMOUNT_DEDUCT_DATE    = SYSDATE,
-                   AMOUNT_DEDUCT_REMARKS = :remarks
-            WHERE  ID                    = :id
-              AND  AMOUNT_DEDUCT_FLAG    = 'P'
-        """
+        sql = ESIM_FAILURE_SQL
         try:
             with get_oracle_conn() as conn:
                 cur = conn.cursor()
