@@ -97,9 +97,9 @@ class TestUnitRequirements:
             _env_file=None,
         )
         assert s.enabled_zones == "NZ"
-        assert s.fancysale_batch_size == 50
-        assert s.simswap_batch_size == 50
-        assert s.esim_batch_size == 50
+        assert s.fancysale_batch_size == 100
+        assert s.simswap_batch_size == 100
+        assert s.esim_batch_size == 100
 
     def test_manual_zone_inheritance(self):
         """test_manual_zone_inheritance: Omitted zones parameter defaults to settings.enabled_zones."""

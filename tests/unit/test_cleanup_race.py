@@ -45,15 +45,15 @@ class TestBatchSizeConfiguration:
             pg_password="pwd",
             _env_file=None,
         )
-        assert s.fancysale_batch_size == 50
-        assert s.simswap_batch_size == 50
-        assert s.esim_batch_size == 50
+        assert s.fancysale_batch_size == 100
+        assert s.simswap_batch_size == 100
+        assert s.esim_batch_size == 100
 
     def test_global_settings_batch_sizes(self):
-        """Imported global settings has batch size 50."""
-        assert settings.fancysale_batch_size == 50
-        assert settings.simswap_batch_size == 50
-        assert settings.esim_batch_size == 50
+        """Imported global settings has batch size 100."""
+        assert settings.fancysale_batch_size == 100
+        assert settings.simswap_batch_size == 100
+        assert settings.esim_batch_size == 100
 
     def test_adapter_constructor_defaults(self):
         """Adapter constructors must default batch_size to 50."""

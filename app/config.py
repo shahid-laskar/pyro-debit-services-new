@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     # ── Pyro API (shared base URL — used by all debit token managers) ─────────
     pyro_base_url: str
-    pyro_request_timeout_seconds: float = 30.0
+    pyro_request_timeout_seconds: float = 15.0
 
     # ── Oracle DB (FancySale / SimSwap / ESIM CAF tables) ─────────────────────
     oracle_user: str
@@ -58,8 +58,8 @@ class Settings(BaseSettings):
     fancysale_password: str = ""
     fancysale_secret_key: str = ""
     fancysale_enabled: bool = True
-    fancysale_batch_size: int = 50
-    fancysale_interval_minutes: int = 30
+    fancysale_batch_size: int = 100
+    fancysale_interval_minutes: int = 2
     fancysale_stuck_minutes: int = 10
     # ── SimSwap debit credentials (feature off by default) ────────────────────
     simswap_api_key: str = ""
@@ -67,8 +67,8 @@ class Settings(BaseSettings):
     simswap_password: str = ""
     simswap_secret_key: str = ""
     simswap_enabled: bool = False
-    simswap_batch_size: int = 50
-    simswap_interval_minutes: int = 30
+    simswap_batch_size: int = 100
+    simswap_interval_minutes: int = 2
     simswap_stuck_minutes: int = 10
 
     # ── ESIM debit credentials (feature off by default) ───────────────────────
@@ -77,8 +77,8 @@ class Settings(BaseSettings):
     esim_password: str = ""
     esim_secret_key: str = ""
     esim_enabled: bool = False
-    esim_batch_size: int = 50
-    esim_interval_minutes: int = 30
+    esim_batch_size: int = 100
+    esim_interval_minutes: int = 2
     esim_stuck_minutes: int = 10
     
     validate_disabled_debit_credentials: bool = False

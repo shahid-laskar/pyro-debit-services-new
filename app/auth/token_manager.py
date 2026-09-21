@@ -36,6 +36,7 @@ class PyroAuthService:
         self._access_token_exp: Optional[float] = None  # Unix timestamp from JWT
         self._auth_lock  = asyncio.Lock()   # serialises authenticate() (full re-login)
         self._token_lock = asyncio.Lock()   # serialises get_access_token() checks
+        self._client: Optional[httpx.AsyncClient] = None
 
 
     def _base_headers(self) -> dict:
@@ -74,20 +75,44 @@ class PyroAuthService:
                          self.label, label, raw[:200])
             return {"statusCode": -1, "message": f"Response parse failed: {dec_err}"}
 
+    def get_http_client(self) -> httpx.AsyncClient:
+        """Return the dedicated persistent httpx.AsyncClient for this service token manager.
+
+        Reuses keep-alive connections across authentication and debit transactions for this service.
+        """
+        if self._client is None or self._client.is_closed:
+            limits = httpx.Limits(
+                max_keepalive_connections=10,
+                max_connections=20,
+                keepalive_expiry=30.0,
+            )
+            self._client = httpx.AsyncClient(
+                verify=True,
+                timeout=self._timeout(),
+                limits=limits,
+            )
+        return self._client
+
+    async def close(self) -> None:
+        """Close the persistent HTTP client cleanly."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    async def authenticate(self) -> bool:
+    async def authenticate(self, client: Optional[httpx.AsyncClient] = None) -> bool:
         
         async with self._auth_lock:
             body = {"loginId": self.login_id, "password": self.password}
             encrypted_body = encrypt(json.dumps(body), self.secret_key)
             try:
-                async with httpx.AsyncClient(verify=True, timeout=self._timeout()) as client:
-                    resp = await client.post(
-                        f"{self.base_url}/auth-api/authentication",
-                        headers={**self._base_headers(), "Content-Type": "application/json"},
-                        content=encrypted_body,
-                    )
+                http_client = client or self.get_http_client()
+                resp = await http_client.post(
+                    f"{self.base_url}/auth-api/authentication",
+                    headers={**self._base_headers(), "Content-Type": "application/json"},
+                    content=encrypted_body,
+                )
             except httpx.TimeoutException as exc:
                 logger.error(
                         "Pyro authentication request timed out after %.1fs: %s",
@@ -117,21 +142,21 @@ class PyroAuthService:
                         self.label, data.get("statusCode"), data.get("message"))
             return False
 
-    async def refresh_access_token(self) -> bool:
+    async def refresh_access_token(self, client: Optional[httpx.AsyncClient] = None) -> bool:
         
         if not self.session_token or not self.access_token:
             logger.warning("refresh_access_token called before authenticate - re-authenticating")
-            return await self.authenticate()
+            return await self.authenticate(client=client)
         try:
-            async with httpx.AsyncClient(verify=True, timeout=self._timeout()) as client:
-                resp = await client.get(
-                    f"{self.base_url}/auth-api/refresh-access-token",
-                    headers={
-                        **self._base_headers(),
-                        "sessionToken": self.session_token,
-                        "accessToken":  self.access_token,
-                    },
-                )
+            http_client = client or self.get_http_client()
+            resp = await http_client.get(
+                f"{self.base_url}/auth-api/refresh-access-token",
+                headers={
+                    **self._base_headers(),
+                    "sessionToken": self.session_token,
+                    "accessToken":  self.access_token,
+                },
+            )
             data = self._parse_pyro_response(resp, "REFRESH_ACCESS_TOKEN")
         except httpx.TimeoutException as exc:
             logger.error(

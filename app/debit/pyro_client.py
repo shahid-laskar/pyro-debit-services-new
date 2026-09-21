@@ -117,8 +117,8 @@ async def wallet_adjustment(
 
     # ── 3. HTTP POST ──────────────────────────────────────────────────────────
     try:
-        async with httpx.AsyncClient(verify=True, timeout=30.0) as client:
-            resp = await client.post(url, headers=headers, content=encrypted_body)
+        client = token_manager.get_http_client()
+        resp   = await client.post(url, headers=headers, content=encrypted_body)
 
         ended_at    = datetime.now(timezone.utc)
         duration    = int((ended_at - started_at).total_seconds() * 1000)

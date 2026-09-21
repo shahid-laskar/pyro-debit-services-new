@@ -79,6 +79,8 @@ async def lifespan(app: FastAPI):
         stop_scheduler()
     close_oracle_pool()
     close_pg_pool()
+    for tm in ALL_DEBIT_TOKEN_MANAGERS:
+        await tm.close()
     logger.info("Shutdown complete")
 
 
