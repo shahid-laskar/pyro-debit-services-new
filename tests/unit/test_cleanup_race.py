@@ -353,7 +353,8 @@ class TestProcessorOwnershipLifecycle:
         adapter.get_record_ref.side_effect = lambda r: str(r["id"])
         adapter.map_to_pyro_params.side_effect = RuntimeError("Fatal mapping error")
 
-        with patch("app.debit.processor.wallet_adjustment", new_callable=AsyncMock):
+        with patch("app.debit.processor.wallet_adjustment", new_callable=AsyncMock), \
+             patch("app.debit.processor.async_insert_debit_txn_log", new_callable=AsyncMock):
             summary = await run_debit_batch(adapter)
 
             assert summary["processed"] == 2

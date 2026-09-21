@@ -369,7 +369,8 @@ class TestWritebackFailureSimulation:
             "data": {"pyroId": "PYRO_TXN_888"},
         }
 
-        with patch("app.debit.processor.wallet_adjustment", mock_pyro_client):
+        with patch("app.debit.processor.wallet_adjustment", mock_pyro_client), \
+             patch("app.debit.processor.async_insert_debit_txn_log", new_callable=AsyncMock):
             summary = await run_debit_batch(adapter)
 
         # Batch records failure due to writeback failure
