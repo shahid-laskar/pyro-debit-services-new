@@ -127,7 +127,8 @@ async def wallet_adjustment(
         status_text = data.get("status", "")
         is_success  = "Y" if (status_code in DEBIT_SUCCESS_CODE
                                and status_text == "SUCCESS") else "N"
-        pyro_txn_id = str(data.get("data", {}).get("pyroId", "")) or None
+        raw_pyro_id = (data.get("data") or {}).get("pyroId")    # "data": null on errors
+        pyro_txn_id = str(raw_pyro_id) if raw_pyro_id not in (None, "") else None
 
         await async_insert_debit_txn_log(
             service_type=service_type,

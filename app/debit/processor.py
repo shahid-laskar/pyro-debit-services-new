@@ -329,9 +329,11 @@ async def _run_locked_batch(
 
                 # ── 4. Handle outcome ─────────────────────────────────────────────
                 if sc in DEBIT_SUCCESS_CODE and response.get("status") == "SUCCESS":
-                    pyro_txn_id = str(data.get("pyroId", ""))
-                    bal_before  = data.get("balanceBefore", 0.0)
-                    bal_after   = data.get("balanceAfter",  0.0)
+                    raw_pyro_id = data.get("pyroId")
+                    # null/missing pyroId must stay None, never the string "None"
+                    pyro_txn_id = str(raw_pyro_id) if raw_pyro_id not in (None, "") else None
+                    bal_before  = data.get("balanceBefore")
+                    bal_after   = data.get("balanceAfter")
                     remarks = (
                         f"[200] SUCCESS {response.get('message', '')} "
                         f"pyroId={pyro_txn_id} "
