@@ -205,11 +205,8 @@ async def reset_stuck_debit(
         context.circle_count,
     )
 
-    count = await asyncio.to_thread(
-        adapter.reset_stuck_processing,
-        effective_minutes,
-        context=context,
-    )
+    from app.debit.dist_lock import locked_reset_stuck
+    count = await locked_reset_stuck(adapter, effective_minutes, context=context)
     return {
         "service_type":       service_type,
         "execution_id":       context.execution_id,

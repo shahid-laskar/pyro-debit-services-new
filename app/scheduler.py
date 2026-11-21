@@ -87,11 +87,8 @@ async def _stuck_cleanup_job():
                 adapter.stuck_minutes,
             )
 
-            count = await asyncio.to_thread(
-                adapter.reset_stuck_processing,
-                adapter.stuck_minutes,
-                context=context,
-            )
+            from app.debit.dist_lock import locked_reset_stuck
+            count = await locked_reset_stuck(adapter, adapter.stuck_minutes, context=context)
 
             logger.info(
                 "Scheduler: [%s] cleanup done — execution_id=%s service_type=%s source=SCHEDULED zones=%s circle_count=%d mode=%s reset_count=%d",

@@ -39,7 +39,11 @@ class DebitServiceAdapter(Protocol):
         ...
 
     def mark_failed(self, record: dict, remarks: str) -> None:
-       
+
+        ...
+
+    def release_claim(self, record: dict, remarks: str) -> None:
+        """Return a claimed row to 'N' without marking it rejected (debit did not happen)."""
         ...
 
     def mark_reconciliation_required(

@@ -232,10 +232,10 @@ class TestProcessorIdempotency:
     @pytest.mark.parametrize("response", [
         {"statusCode": 5000, "status": "FAILED", "message": "Insufficient funds",
          "_request_sent": True, "_http_status": 200},
-        {"statusCode": -1, "status": "ERROR", "message": "Failed to obtain access token",
-         "_request_sent": False, "_http_status": None},
-        {"statusCode": -1, "status": "ERROR", "message": "Connection failed",
-         "_request_sent": False, "_http_status": None},
+        {"statusCode": 5000, "status": "FAILED", "message": "Invalid mpin for source msisdn: 8903696189",
+         "_request_sent": True, "_http_status": 200},
+        # Token / connection failures that never reached Pyro are released, not
+        # rejected: see test_p2_debit_auth_and_lock.py
     ])
     async def test_definitive_failure_still_marks_rejected(self, response):
         adapter = _adapter()

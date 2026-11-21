@@ -183,8 +183,23 @@ class PyroAuthService:
 
     
     async def get_access_token(self) -> Optional[str]:
-       
+        """Return a valid access token, or None if none can be obtained.
+
+        Refresh first; if refresh fails (e.g. the session was invalidated by another
+        login), fall back to a full authentication. Never returns a token known to be
+        expired or rejected.
+        """
         async with self._token_lock:
             if not self._is_access_token_valid():
-                await self.refresh_access_token()
+                if not await self.refresh_access_token():
+                    logger.warning("[%s] Token refresh failed — re-authenticating", self.label)
+                    if not await self.authenticate():
+                        return None
             return self.access_token
+
+    def invalidate(self) -> None:
+        """Forget the current tokens after Pyro rejected them (HTTP 401 / invalid token),
+        so the next get_access_token() performs a full re-authentication."""
+        self.session_token     = None
+        self.access_token      = None
+        self._access_token_exp = None

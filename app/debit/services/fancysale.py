@@ -338,6 +338,34 @@ class FancySaleAdapter:
                 record["refid"], exc
             )
 
+    def release_claim(self, record: dict, remarks: str) -> None:
+        """Return a claimed ('P') row to 'N' WITHOUT marking it rejected.
+
+        Used when the debit definitely did not happen for reasons unrelated to the
+        record (e.g. Pyro rejected our token). Non-fatal: if this fails the row stays
+        'P' and the stuck cleanup resets it (its debit history is provably clean).
+        """
+        sql = """
+            UPDATE CAF_ADMIN.VANITYSALE_FRANCH_DATA
+            SET    CAF_ENTRY_DONE = 'N',
+                   PYRO_REMARKS   = :remarks
+            WHERE  REFID          = :refid
+              AND  CAF_ENTRY_DONE = 'P'
+        """
+        try:
+            with get_oracle_conn() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, {
+                    "remarks": remarks[:2000],
+                    "refid": record["refid"],
+                })
+                conn.commit()
+        except Exception as exc:
+            logger.error(
+                "[FANCYSALE] release_claim DB failure (non-fatal) REFID=%s: %s",
+                record["refid"], exc,
+            )
+
     def reset_stuck_processing(
         self,
         stuck_minutes: int,
