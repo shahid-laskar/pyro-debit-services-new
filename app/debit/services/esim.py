@@ -18,7 +18,7 @@ _STATUS_R  = "R"       # rejected   (set by us on Pyro failure)
 _STATUS_QM = "QM"      # MPIN error — Sanchar Mitra sets; we re-pick after fix
 _STATUS_QB = "QB"      # balance error — Sanchar Mitra sets; we re-pick after top-up
 
-_MODULE_TYPE = "ESIM"
+_MODULE_TYPE = "SIMSWAP-ESIM"
 
 # ── Q013 Claim Query with exact ID (PK), status guard, module guard, and CIRCLE_CODE guard ─────
 ESIM_CLAIM_SQL = """
@@ -28,7 +28,7 @@ SET AMOUNT_DEDUCT_FLAG = 'P',
     AMOUNT_DEDUCT_REMARKS = 'Processing started'
 WHERE ID = :id
   AND CIRCLE_CODE = :circle_code
-  AND MODULE_TYPE = 'ESIM'
+  AND MODULE_TYPE = 'SIMSWAP-ESIM'
   AND AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB')
 """.strip()
 
@@ -40,7 +40,7 @@ SET    AMOUNT_DEDUCT_FLAG    = 'Y',
        AMOUNT_DEDUCT_DATE    = SYSDATE,
        AMOUNT_DEDUCT_REMARKS = :remarks
 WHERE  ID                    = :id
-  AND  MODULE_TYPE           = 'ESIM'
+  AND  MODULE_TYPE           = 'SIMSWAP-ESIM'
   AND  AMOUNT_DEDUCT_FLAG    = 'P'
 """.strip()
 
@@ -49,7 +49,7 @@ ESIM_RECONCILIATION_SQL = """
 UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
 SET    AMOUNT_DEDUCT_REMARKS = :remarks
 WHERE  ID                    = :id
-  AND  MODULE_TYPE           = 'ESIM'
+  AND  MODULE_TYPE           = 'SIMSWAP-ESIM'
   AND  AMOUNT_DEDUCT_FLAG    = 'P'
 """.strip()
 
@@ -60,7 +60,7 @@ SET    AMOUNT_DEDUCT_FLAG    = 'R',
        AMOUNT_DEDUCT_DATE    = SYSDATE,
        AMOUNT_DEDUCT_REMARKS = :remarks
 WHERE  ID                    = :id
-  AND  MODULE_TYPE           = 'ESIM'
+  AND  MODULE_TYPE           = 'SIMSWAP-ESIM'
   AND  AMOUNT_DEDUCT_FLAG    = 'P'
 """.strip()
 
@@ -79,7 +79,7 @@ def build_esim_candidate_query(
     If context is FILTERED, injects:
         AND CIRCLE_CODE IN (:c_0, :c_1, ...)
     If context is ALL (or None), omits circle filtering to preserve nationwide behavior.
-    Preserves FIFO ordering (REQUEST_DATE ASC) and module filter (MODULE_TYPE = 'ESIM').
+    Preserves FIFO ordering (REQUEST_DATE ASC) and module filter (MODULE_TYPE = 'SIMSWAP-ESIM').
     """
     bind_params: dict = {"batch_size": batch_size}
     circle_predicate = ""
@@ -114,7 +114,7 @@ FROM (
         SOURCE
     FROM CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
     WHERE AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB')
-      AND MODULE_TYPE = 'ESIM'
+      AND MODULE_TYPE = 'SIMSWAP-ESIM'
 {circle_predicate}    ORDER BY REQUEST_DATE ASC
 )
 WHERE ROWNUM <= :batch_size
@@ -134,7 +134,7 @@ def build_esim_cleanup_query(
     If context is ALL (or None), omits circle filtering to preserve nationwide behavior.
     Excludes active in-flight references (via build_active_exclusion_predicate) to eliminate cleanup races.
     Protects reconciliation-required records from being reset to N.
-    Preserves MODULE_TYPE = 'ESIM'.
+    Preserves MODULE_TYPE = 'SIMSWAP-ESIM'.
     """
     bind_params: dict = {"stuck_minutes": stuck_minutes}
     circle_predicate = ""
@@ -157,7 +157,7 @@ UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
 SET    AMOUNT_DEDUCT_FLAG    = 'N',
        AMOUNT_DEDUCT_REMARKS = 'Reset: stuck in processing state'
 WHERE  AMOUNT_DEDUCT_FLAG    = 'P'
-  AND  MODULE_TYPE           = 'ESIM'
+  AND  MODULE_TYPE           = 'SIMSWAP-ESIM'
   AND  AMOUNT_DEDUCT_DATE   IS NOT NULL
   AND  AMOUNT_DEDUCT_DATE    < SYSDATE - (:stuck_minutes / 1440)
   AND  (AMOUNT_DEDUCT_REMARKS IS NULL OR AMOUNT_DEDUCT_REMARKS NOT LIKE 'RECONCILIATION_REQUIRED%')
@@ -484,7 +484,7 @@ class EsimAdapter:
             SET    AMOUNT_DEDUCT_FLAG    = 'N',
                    AMOUNT_DEDUCT_REMARKS = :remarks
             WHERE  ID                    = :id
-              AND  MODULE_TYPE           = 'ESIM'
+              AND  MODULE_TYPE           = 'SIMSWAP-ESIM'
               AND  AMOUNT_DEDUCT_FLAG    = 'P'
         """
         try:
@@ -512,7 +512,7 @@ class EsimAdapter:
         Scoped to the effective execution context (zone isolation).
         Excludes in-flight active ownership references to prevent cleanup races.
         Protects records requiring manual reconciliation from being reset.
-        Preserves MODULE_TYPE = 'ESIM'.
+        Preserves MODULE_TYPE = 'SIMSWAP-ESIM'.
         """
         if not self.enabled:
             return 0

@@ -10,7 +10,7 @@ Verifies:
    - Failure writeback
    - Stuck processing cleanup
 2. SimSwap operations strictly bind/filter MODULE_TYPE = 'SIMSWAP'.
-3. ESIM operations strictly bind/filter MODULE_TYPE = 'ESIM'.
+3. ESIM operations strictly bind/filter MODULE_TYPE = 'SIMSWAP-ESIM'.
 4. Cross-service isolation: SimSwap queries never target ESIM rows, and ESIM queries
    never target SimSwap rows, even if IDs collide or are shared.
 """
@@ -148,49 +148,49 @@ class TestSimSwapSharedTableSafety:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestEsimSharedTableSafety:
-    """Ensure all ESIM operations against SIMSWAP_AMOUNT_DEDUCT_REQUESTS guard MODULE_TYPE='ESIM'."""
+    """Ensure all ESIM operations against SIMSWAP_AMOUNT_DEDUCT_REQUESTS guard MODULE_TYPE='SIMSWAP-ESIM'."""
 
     def test_esim_candidate_query_has_module_type(self):
         sql, _ = build_esim_candidate_query(batch_size=50)
         assert "FROM CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS" in sql
-        assert "MODULE_TYPE = 'ESIM'" in sql
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in sql
         assert "'SIMSWAP'" not in sql
 
     def test_esim_claim_query_has_module_type(self):
         sql = build_esim_claim_query()
         assert "UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS" in sql
-        assert "MODULE_TYPE = 'ESIM'" in sql
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in sql
         assert "'SIMSWAP'" not in sql
 
     def test_esim_claim_constant_has_module_type(self):
-        assert "MODULE_TYPE = 'ESIM'" in ESIM_CLAIM_SQL
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in ESIM_CLAIM_SQL
 
     def test_esim_primary_success_sql_has_module_type(self):
         assert "UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS" in ESIM_PRIMARY_SUCCESS_SQL
-        assert "MODULE_TYPE           = 'ESIM'" in ESIM_PRIMARY_SUCCESS_SQL or \
-               "MODULE_TYPE = 'ESIM'" in ESIM_PRIMARY_SUCCESS_SQL
+        assert "MODULE_TYPE           = 'SIMSWAP-ESIM'" in ESIM_PRIMARY_SUCCESS_SQL or \
+               "MODULE_TYPE = 'SIMSWAP-ESIM'" in ESIM_PRIMARY_SUCCESS_SQL
         assert "'SIMSWAP'" not in ESIM_PRIMARY_SUCCESS_SQL
 
     def test_esim_reconciliation_sql_has_module_type(self):
         assert "UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS" in ESIM_RECONCILIATION_SQL
-        assert "MODULE_TYPE           = 'ESIM'" in ESIM_RECONCILIATION_SQL or \
-               "MODULE_TYPE = 'ESIM'" in ESIM_RECONCILIATION_SQL
+        assert "MODULE_TYPE           = 'SIMSWAP-ESIM'" in ESIM_RECONCILIATION_SQL or \
+               "MODULE_TYPE = 'SIMSWAP-ESIM'" in ESIM_RECONCILIATION_SQL
         assert "'SIMSWAP'" not in ESIM_RECONCILIATION_SQL
 
     def test_esim_failure_sql_has_module_type(self):
         assert "UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS" in ESIM_FAILURE_SQL
-        assert "MODULE_TYPE           = 'ESIM'" in ESIM_FAILURE_SQL or \
-               "MODULE_TYPE = 'ESIM'" in ESIM_FAILURE_SQL
+        assert "MODULE_TYPE           = 'SIMSWAP-ESIM'" in ESIM_FAILURE_SQL or \
+               "MODULE_TYPE = 'SIMSWAP-ESIM'" in ESIM_FAILURE_SQL
         assert "'SIMSWAP'" not in ESIM_FAILURE_SQL
 
     def test_esim_cleanup_query_has_module_type(self):
         sql, _ = build_esim_cleanup_query(stuck_minutes=15)
         assert "UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS" in sql
-        assert "MODULE_TYPE           = 'ESIM'" in sql or "MODULE_TYPE = 'ESIM'" in sql
+        assert "MODULE_TYPE           = 'SIMSWAP-ESIM'" in sql or "MODULE_TYPE = 'SIMSWAP-ESIM'" in sql
         assert "'SIMSWAP'" not in sql
 
     def test_esim_mark_success_executes_module_guard(self):
-        """EsimAdapter.mark_success executes primary query containing MODULE_TYPE = 'ESIM'."""
+        """EsimAdapter.mark_success executes primary query containing MODULE_TYPE = 'SIMSWAP-ESIM'."""
         adapter = EsimAdapter(token_manager=MagicMock(), enabled=True)
         record = {"id": 2201, "gsmnumber": "9400022222", "circle_code": 55}
 
@@ -206,10 +206,10 @@ class TestEsimSharedTableSafety:
             primary_sql = mock_cur.execute.call_args_list[0][0][0]
             assert "SIMSWAP_AMOUNT_DEDUCT_REQUESTS" in primary_sql
             assert "MODULE_TYPE" in primary_sql
-            assert "'ESIM'" in primary_sql
+            assert "'SIMSWAP-ESIM'" in primary_sql
 
     def test_esim_mark_reconciliation_executes_module_guard(self):
-        """EsimAdapter.mark_reconciliation_required executes query containing MODULE_TYPE = 'ESIM'."""
+        """EsimAdapter.mark_reconciliation_required executes query containing MODULE_TYPE = 'SIMSWAP-ESIM'."""
         adapter = EsimAdapter(token_manager=MagicMock(), enabled=True)
         record = {"id": 2202}
 
@@ -224,10 +224,10 @@ class TestEsimSharedTableSafety:
             sql = mock_cur.execute.call_args[0][0]
             assert "SIMSWAP_AMOUNT_DEDUCT_REQUESTS" in sql
             assert "MODULE_TYPE" in sql
-            assert "'ESIM'" in sql
+            assert "'SIMSWAP-ESIM'" in sql
 
     def test_esim_mark_failed_executes_module_guard(self):
-        """EsimAdapter.mark_failed executes query containing MODULE_TYPE = 'ESIM'."""
+        """EsimAdapter.mark_failed executes query containing MODULE_TYPE = 'SIMSWAP-ESIM'."""
         adapter = EsimAdapter(token_manager=MagicMock(), enabled=True)
         record = {"id": 2203}
 
@@ -242,7 +242,7 @@ class TestEsimSharedTableSafety:
             sql = mock_cur.execute.call_args[0][0]
             assert "SIMSWAP_AMOUNT_DEDUCT_REQUESTS" in sql
             assert "MODULE_TYPE" in sql
-            assert "'ESIM'" in sql
+            assert "'SIMSWAP-ESIM'" in sql
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -272,10 +272,10 @@ class TestCrossServiceIsolation:
 
         for sq in simswap_queries:
             assert "MODULE_TYPE = 'SIMSWAP'" in sq or "MODULE_TYPE           = 'SIMSWAP'" in sq
-            assert "MODULE_TYPE = 'ESIM'" not in sq
-            assert "MODULE_TYPE           = 'ESIM'" not in sq
+            assert "MODULE_TYPE = 'SIMSWAP-ESIM'" not in sq
+            assert "MODULE_TYPE           = 'SIMSWAP-ESIM'" not in sq
 
         for eq in esim_queries:
-            assert "MODULE_TYPE = 'ESIM'" in eq or "MODULE_TYPE           = 'ESIM'" in eq
+            assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in eq or "MODULE_TYPE           = 'SIMSWAP-ESIM'" in eq
             assert "MODULE_TYPE = 'SIMSWAP'" not in eq
             assert "MODULE_TYPE           = 'SIMSWAP'" not in eq

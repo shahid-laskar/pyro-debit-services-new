@@ -137,7 +137,7 @@ class TestAuthFailureHandling:
 @pytest.mark.parametrize("adapter_cls,module,key,module_guard", [
     (FancySaleAdapter, "fancysale", "refid", None),
     (SimswapAdapter, "simswap", "id", "SIMSWAP"),
-    (EsimAdapter, "esim", "id", "ESIM"),
+    (EsimAdapter, "esim", "id", "SIMSWAP-ESIM"),
 ])
 def test_release_claim_sql(adapter_cls, module, key, module_guard):
     cur = MagicMock()

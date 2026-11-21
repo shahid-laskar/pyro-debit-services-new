@@ -279,7 +279,7 @@ class TestAdapterResetStuckExclusion:
             params_executed = mock_cur.execute.call_args[0][1]
 
             assert "ID NOT IN (:act_0, :act_1)" in sql_executed
-            assert "MODULE_TYPE           = 'ESIM'" in sql_executed
+            assert "MODULE_TYPE           = 'SIMSWAP-ESIM'" in sql_executed
             assert params_executed["act_0"] == 3001
             assert params_executed["act_1"] == 3002
 

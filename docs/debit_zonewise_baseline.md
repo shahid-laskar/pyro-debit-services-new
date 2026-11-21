@@ -137,7 +137,7 @@ flowchart TD
 
 - **Primary Source Table:** Oracle `CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS` (shared with SimSwap).
 - **Primary Row Identifier:** `ID` (Verified Primary Key).
-- **Workflow Discriminator:** `MODULE_TYPE = 'ESIM'`.
+- **Workflow Discriminator:** `MODULE_TYPE = 'SIMSWAP-ESIM'`.
 - **Status Field:** `AMOUNT_DEDUCT_FLAG`.
 - **Timestamp Field:** `AMOUNT_DEDUCT_DATE`.
 - **Remarks Field:** `AMOUNT_DEDUCT_REMARKS`.
@@ -146,7 +146,7 @@ flowchart TD
   UPDATE CAF_ADMIN.SIM_SWAP_DATA SET ACTIVATION_STATUS = 'AI' WHERE GSMNUMBER = :gsmnumber AND ACTIVATION_STATUS = 'IF'
   ```
 - **Workflow:**
-  - Identical pipeline to SimSwap with `MODULE_TYPE = 'ESIM'` enforced in Q012, Q013, and Q017.
+  - Identical pipeline to SimSwap with `MODULE_TYPE = 'SIMSWAP-ESIM'` enforced in Q012, Q013, and Q017.
   - Phase 2 writeback updates `CAF_ADMIN.SIM_SWAP_DATA` rather than `CAF_ADMIN.BCD`.
 
 ---
@@ -166,12 +166,12 @@ flowchart TD
 | **Q009** | `simswap.py`<br/>`mark_success` (Phase 2) | `CAF_ADMIN.BCD` | UPDATE | `UPDATE CAF_ADMIN.BCD SET ACTIVATION_STATUS = 'AI' WHERE GSMNUMBER = :gsmnumber AND ACTIVATION_STATUS = 'IF'` | `gsmnumber` | `= 'IF'` | **NO** |
 | **Q010** | `simswap.py`<br/>`mark_failed` | `CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS` | UPDATE | `UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS SET AMOUNT_DEDUCT_FLAG = 'R', AMOUNT_DEDUCT_DATE = SYSDATE, AMOUNT_DEDUCT_REMARKS = :remarks WHERE ID = :id AND AMOUNT_DEDUCT_FLAG = 'P'` | `remarks`, `id` | `= 'P'` | **NO** |
 | **Q011** | `simswap.py`<br/>`reset_stuck_processing` | `CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS` | UPDATE | `UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS SET AMOUNT_DEDUCT_FLAG = 'N', AMOUNT_DEDUCT_REMARKS = 'Reset: stuck in processing state' WHERE AMOUNT_DEDUCT_FLAG = 'P' AND MODULE_TYPE = 'SIMSWAP' AND AMOUNT_DEDUCT_DATE IS NOT NULL AND AMOUNT_DEDUCT_DATE < SYSDATE - (:stuck_minutes / 1440)` | `stuck_minutes` | `= 'P'` | **NO** (Nationwide) |
-| **Q012** | `esim.py`<br/>`fetch_and_claim` | `CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS` | SELECT | `SELECT * FROM (SELECT ID, REFID, CTOPUPNO, GSMNUMBER, SIMNUMBER, AMOUNT, CAF_ADMIN.F_DECRYPT(MPIN) AS plain_mpin, MPIN_LENGTH, SS_REQUEST_ID, MODULE_TYPE, REQUEST_DATE, AMOUNT_DEDUCT_FLAG, CIRCLE_CODE, DEALERCODE, SWAP_TYPE, SOURCE FROM CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS WHERE AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB') AND MODULE_TYPE = 'ESIM' ORDER BY REQUEST_DATE ASC) WHERE ROWNUM <= :batch_size` | `batch_size` | `IN ('N','QM','QB')` | **NO** (Nationwide) |
-| **Q013** | `esim.py`<br/>`fetch_and_claim` | `CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS` | UPDATE | `UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS SET AMOUNT_DEDUCT_FLAG = 'P', AMOUNT_DEDUCT_DATE = SYSDATE, AMOUNT_DEDUCT_REMARKS = 'Processing started' WHERE ID = :id AND AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB') AND MODULE_TYPE = 'ESIM'` | `id` | `IN ('N','QM','QB')` | **NO** |
+| **Q012** | `esim.py`<br/>`fetch_and_claim` | `CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS` | SELECT | `SELECT * FROM (SELECT ID, REFID, CTOPUPNO, GSMNUMBER, SIMNUMBER, AMOUNT, CAF_ADMIN.F_DECRYPT(MPIN) AS plain_mpin, MPIN_LENGTH, SS_REQUEST_ID, MODULE_TYPE, REQUEST_DATE, AMOUNT_DEDUCT_FLAG, CIRCLE_CODE, DEALERCODE, SWAP_TYPE, SOURCE FROM CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS WHERE AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB') AND MODULE_TYPE = 'SIMSWAP-ESIM' ORDER BY REQUEST_DATE ASC) WHERE ROWNUM <= :batch_size` | `batch_size` | `IN ('N','QM','QB')` | **NO** (Nationwide) |
+| **Q013** | `esim.py`<br/>`fetch_and_claim` | `CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS` | UPDATE | `UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS SET AMOUNT_DEDUCT_FLAG = 'P', AMOUNT_DEDUCT_DATE = SYSDATE, AMOUNT_DEDUCT_REMARKS = 'Processing started' WHERE ID = :id AND AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB') AND MODULE_TYPE = 'SIMSWAP-ESIM'` | `id` | `IN ('N','QM','QB')` | **NO** |
 | **Q014** | `esim.py`<br/>`mark_success` (Phase 1) | `CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS` | UPDATE | `UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS SET AMOUNT_DEDUCT_FLAG = 'Y', TRANSACTION_ID = :pyro_txn_id, AMOUNT_DEDUCT_DATE = SYSDATE, AMOUNT_DEDUCT_REMARKS = :remarks WHERE ID = :id AND AMOUNT_DEDUCT_FLAG = 'P'` | `pyro_txn_id`, `remarks`, `id` | `= 'P'` | **NO** |
 | **Q015** | `esim.py`<br/>`mark_success` (Phase 2) | `CAF_ADMIN.SIM_SWAP_DATA` | UPDATE | `UPDATE CAF_ADMIN.SIM_SWAP_DATA SET ACTIVATION_STATUS = 'AI' WHERE GSMNUMBER = :gsmnumber AND ACTIVATION_STATUS = 'IF'` | `gsmnumber` | `= 'IF'` | **NO** |
 | **Q016** | `esim.py`<br/>`mark_failed` | `CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS` | UPDATE | `UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS SET AMOUNT_DEDUCT_FLAG = 'R', AMOUNT_DEDUCT_DATE = SYSDATE, AMOUNT_DEDUCT_REMARKS = :remarks WHERE ID = :id AND AMOUNT_DEDUCT_FLAG = 'P'` | `remarks`, `id` | `= 'P'` | **NO** |
-| **Q017** | `esim.py`<br/>`reset_stuck_processing` | `CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS` | UPDATE | `UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS SET AMOUNT_DEDUCT_FLAG = 'N', AMOUNT_DEDUCT_REMARKS = 'Reset: stuck in processing state' WHERE AMOUNT_DEDUCT_FLAG = 'P' AND MODULE_TYPE = 'ESIM' AND AMOUNT_DEDUCT_DATE IS NOT NULL AND AMOUNT_DEDUCT_DATE < SYSDATE - (:stuck_minutes / 1440)` | `stuck_minutes` | `= 'P'` | **NO** (Nationwide) |
+| **Q017** | `esim.py`<br/>`reset_stuck_processing` | `CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS` | UPDATE | `UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS SET AMOUNT_DEDUCT_FLAG = 'N', AMOUNT_DEDUCT_REMARKS = 'Reset: stuck in processing state' WHERE AMOUNT_DEDUCT_FLAG = 'P' AND MODULE_TYPE = 'SIMSWAP-ESIM' AND AMOUNT_DEDUCT_DATE IS NOT NULL AND AMOUNT_DEDUCT_DATE < SYSDATE - (:stuck_minutes / 1440)` | `stuck_minutes` | `= 'P'` | **NO** (Nationwide) |
 | **Q018** | `debit_log.py`<br/>`_do_insert_debit_txn_log` | `public.debit_txn_log` (Postgres) | INSERT | `INSERT INTO public.debit_txn_log (service_type, oracle_ref_id, client_id, source_msisdn, dest_msisdn, amount, api_stage, api_endpoint, attempt_no, request_body, response_http_code, response_body, pyro_status_code, pyro_status_text, pyro_txn_id, call_started_at, call_ended_at, duration_ms, is_success, is_perm_failure, error_class, error_detail) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)` | 22-element value tuple | N/A (Append-only) | N/A |
 
 ---

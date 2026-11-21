@@ -195,7 +195,7 @@ class TestAllModeCandidateSQLEquivalence:
         # Invariant F: Circle predicates MUST be omitted in ALL mode
         assert "CIRCLE_CODE IN" not in sql
         assert "AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB')" in sql
-        assert "MODULE_TYPE = 'ESIM'" in sql
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in sql
         assert "ORDER BY REQUEST_DATE ASC" in sql
         assert "ROWNUM <= :batch_size" in sql
         assert params == {"batch_size": 50}
@@ -278,7 +278,7 @@ class TestAllModeCleanupEquivalenceAndSafety:
         )
         assert "CIRCLE_CODE IN" not in sql
         assert re.search(r"AMOUNT_DEDUCT_FLAG\s*=\s*'P'", sql) is not None
-        assert "MODULE_TYPE           = 'ESIM'" in sql or "MODULE_TYPE = 'ESIM'" in sql
+        assert "MODULE_TYPE           = 'SIMSWAP-ESIM'" in sql or "MODULE_TYPE = 'SIMSWAP-ESIM'" in sql
         assert "(AMOUNT_DEDUCT_REMARKS IS NULL OR AMOUNT_DEDUCT_REMARKS NOT LIKE 'RECONCILIATION_REQUIRED%')" in sql
         assert "AND (ID NOT IN (:act_0))" in sql or "AND ID NOT IN (:act_0)" in sql
         assert params["stuck_minutes"] == 10
@@ -393,10 +393,10 @@ class TestAllModeMultiZoneCandidateProcessing:
         adapter = EsimAdapter(token_manager=MagicMock(), enabled=True)
 
         mock_candidates = [
-            (201, "REF_201", "9412300001", "9412399991", "8991000001", 50.0, "123456", 6, "SS_201", "ESIM", "2026-09-08", "N", 50, "D01", "AUTO", "PORTAL"), # NZ: 50
-            (202, "REF_202", "9412300002", "9412399992", "8991000002", 50.0, "123456", 6, "SS_202", "ESIM", "2026-09-08", "N", 11, "D02", "AUTO", "PORTAL"), # WZ: 11
-            (203, "REF_203", "9412300003", "9412399993", "8991000003", 50.0, "123456", 6, "SS_203", "ESIM", "2026-09-08", "N", 74, "D03", "AUTO", "PORTAL"), # EZ: 74
-            (204, "REF_204", "9412300004", "9412399994", "8991000004", 50.0, "123456", 6, "SS_204", "ESIM", "2026-09-08", "N", 44, "D04", "AUTO", "PORTAL"), # SZ: 44
+            (201, "REF_201", "9412300001", "9412399991", "8991000001", 50.0, "123456", 6, "SS_201", "SIMSWAP-ESIM", "2026-09-08", "N", 50, "D01", "AUTO", "PORTAL"), # NZ: 50
+            (202, "REF_202", "9412300002", "9412399992", "8991000002", 50.0, "123456", 6, "SS_202", "SIMSWAP-ESIM", "2026-09-08", "N", 11, "D02", "AUTO", "PORTAL"), # WZ: 11
+            (203, "REF_203", "9412300003", "9412399993", "8991000003", 50.0, "123456", 6, "SS_203", "SIMSWAP-ESIM", "2026-09-08", "N", 74, "D03", "AUTO", "PORTAL"), # EZ: 74
+            (204, "REF_204", "9412300004", "9412399994", "8991000004", 50.0, "123456", 6, "SS_204", "SIMSWAP-ESIM", "2026-09-08", "N", 44, "D04", "AUTO", "PORTAL"), # SZ: 44
         ]
         columns = [
             ("ID",), ("REFID",), ("CTOPUPNO",), ("GSMNUMBER",), ("SIMNUMBER",),
@@ -681,7 +681,7 @@ class TestAllModeEndToEndProcessorBatch:
                 "mpin_length": 6,
                 "circle_code": 4,   # WZ (Gujarat)
                 "ss_request_id": "REQ_601",
-                "module_type": "ESIM",
+                "module_type": "SIMSWAP-ESIM",
                 "caf_serial_no": "CAF_601",
             },
             {
@@ -695,7 +695,7 @@ class TestAllModeEndToEndProcessorBatch:
                 "mpin_length": 6,
                 "circle_code": 40,  # SZ (AP)
                 "ss_request_id": "REQ_602",
-                "module_type": "ESIM",
+                "module_type": "SIMSWAP-ESIM",
                 "caf_serial_no": "CAF_602",
             },
         ]

@@ -415,7 +415,7 @@ class TestNZPilotEndToEndPipeline:
             "mpin_length": 6,
             "circle_code": 62,  # Jammu & Kashmir (NZ)
             "ss_request_id": "REQ_NZ_ES_01",
-            "module_type": "ESIM",
+            "module_type": "SIMSWAP-ESIM",
             "caf_serial_no": "CAF_901",
         }
 

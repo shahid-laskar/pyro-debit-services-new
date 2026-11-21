@@ -200,7 +200,7 @@ class TestEsimQ017CleanupQuery:
         assert "UPDATE CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS" in sql
         assert "AMOUNT_DEDUCT_FLAG    = 'N'" in sql
         assert "AMOUNT_DEDUCT_FLAG    = 'P'" in sql
-        assert "MODULE_TYPE           = 'ESIM'" in sql
+        assert "MODULE_TYPE           = 'SIMSWAP-ESIM'" in sql
         assert "AMOUNT_DEDUCT_REMARKS NOT LIKE 'RECONCILIATION_REQUIRED%'" in sql
         assert "AMOUNT_DEDUCT_REMARKS IS NULL" in sql
         assert "AND CIRCLE_CODE IN (" in sql
@@ -221,7 +221,7 @@ class TestEsimQ017CleanupQuery:
         sql, params = build_esim_cleanup_query(stuck_minutes=10, context=ctx)
 
         assert "CIRCLE_CODE IN" not in sql
-        assert "MODULE_TYPE           = 'ESIM'" in sql
+        assert "MODULE_TYPE           = 'SIMSWAP-ESIM'" in sql
         assert params == {"stuck_minutes": 10}
 
     def test_q017_active_refs_exclusion(self):

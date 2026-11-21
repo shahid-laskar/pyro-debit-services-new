@@ -62,7 +62,7 @@ In `ALL` mode:
       ORDER BY REQUEST_DATE ASC
   ) WHERE ROWNUM <= :batch_size
   ```
-- **ESIM (Q012):** Preserves `MODULE_TYPE = 'ESIM'` and omits circle filter:
+- **ESIM (Q012):** Preserves `MODULE_TYPE = 'SIMSWAP-ESIM'` and omits circle filter:
   ```sql
   SELECT * FROM (
       SELECT ID, REFID, CTOPUPNO, GSMNUMBER, SIMNUMBER, AMOUNT, CAF_ADMIN.F_DECRYPT(MPIN) AS plain_mpin,
@@ -70,7 +70,7 @@ In `ALL` mode:
              CIRCLE_CODE, DEALERCODE, SWAP_TYPE, SOURCE
       FROM CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS
       WHERE AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB')
-        AND MODULE_TYPE = 'ESIM'
+        AND MODULE_TYPE = 'SIMSWAP-ESIM'
       ORDER BY REQUEST_DATE ASC
   ) WHERE ROWNUM <= :batch_size
   ```
@@ -109,7 +109,7 @@ Empirical testing executed against non-production databases confirms live operat
    - Bind parameter dictionary: `{'batch_size': 50}`.
    - Rows returned: **19 rows**.
    - Distinct circles discovered: `{'10', '54', '55', '59', '71'}`.
-   - Preserves strict `MODULE_TYPE = 'ESIM'` isolation.
+   - Preserves strict `MODULE_TYPE = 'SIMSWAP-ESIM'` isolation.
 4. **Cleanup Query Syntax (Q005, Q011, Q017):**
    - Executed in a rolled-back transaction with active reference exclusions.
    - SQL compilation and bind mapping confirmed 100% valid with zero syntax or type conversion errors.

@@ -164,7 +164,7 @@ class TestCheckpoint4ModuleGuards:
 
         for sql in (cand_sql, claim_sql, clean_sql, SIMSWAP_PRIMARY_SUCCESS_SQL, SIMSWAP_FAILURE_SQL):
             assert re.search(r"MODULE_TYPE\s*=\s*'SIMSWAP'", sql)
-            assert not re.search(r"MODULE_TYPE\s*=\s*'ESIM'", sql)
+            assert not re.search(r"MODULE_TYPE\s*=\s*'SIMSWAP-ESIM'", sql)
 
     def test_esim_module_guards_are_strict(self):
         cand_sql, _ = build_esim_candidate_query(50)
@@ -172,7 +172,7 @@ class TestCheckpoint4ModuleGuards:
         clean_sql, _ = build_esim_cleanup_query(10)
 
         for sql in (cand_sql, claim_sql, clean_sql, ESIM_PRIMARY_SUCCESS_SQL, ESIM_FAILURE_SQL):
-            assert re.search(r"MODULE_TYPE\s*=\s*'ESIM'", sql)
+            assert re.search(r"MODULE_TYPE\s*=\s*'SIMSWAP-ESIM'", sql)
             assert not re.search(r"MODULE_TYPE\s*=\s*'SIMSWAP'", sql)
 
 

@@ -137,7 +137,7 @@ class TestESIMIndexAlignment:
     """Validate ESIM query shapes align with index review specifications."""
 
     def test_q012_filtered_shape_and_request_date_order(self):
-        """Q012 filtered must include AMOUNT_DEDUCT_FLAG, MODULE_TYPE='ESIM', and CIRCLE_CODE."""
+        """Q012 filtered must include AMOUNT_DEDUCT_FLAG, MODULE_TYPE='SIMSWAP-ESIM', and CIRCLE_CODE."""
         ctx = ExecutionContext.create(
             source=ExecutionSource.SCHEDULED,
             zones_str="NZ",
@@ -146,19 +146,19 @@ class TestESIMIndexAlignment:
         sql, params = build_esim_candidate_query(batch_size=50, context=ctx)
 
         assert "AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB')" in sql
-        assert "MODULE_TYPE = 'ESIM'" in sql
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in sql
         assert "CIRCLE_CODE IN (" in sql
         assert "ORDER BY REQUEST_DATE ASC" in sql
         assert "ROWNUM <= :batch_size" in sql
 
     def test_q013_claim_uses_id_primary_key_and_circle_code(self):
-        """Q013 claim query must match on PK ID, MODULE_TYPE='ESIM', and CIRCLE_CODE guard."""
+        """Q013 claim query must match on PK ID, MODULE_TYPE='SIMSWAP-ESIM', and CIRCLE_CODE guard."""
         claim_sql = build_esim_claim_query()
 
         assert "CAF_ADMIN.SIMSWAP_AMOUNT_DEDUCT_REQUESTS" in claim_sql
         assert "WHERE ID = :id" in claim_sql
         assert "CIRCLE_CODE = :circle_code" in claim_sql
-        assert "MODULE_TYPE = 'ESIM'" in claim_sql
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in claim_sql
         assert "AMOUNT_DEDUCT_FLAG = 'P'" in claim_sql
 
     def test_q015_secondary_sim_swap_data_uses_gsmnumber_leading_edge(self):

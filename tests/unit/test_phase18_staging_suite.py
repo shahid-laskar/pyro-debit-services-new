@@ -184,18 +184,18 @@ class TestSQLGenerationRequirements:
         assert "AMOUNT_DEDUCT_FLAG = 'P'" in sql
 
     def test_esim_q012_filtered(self):
-        """test_esim_q012_filtered: ESIM candidate query binds MODULE_TYPE='ESIM' and circles."""
+        """test_esim_q012_filtered: ESIM candidate query binds MODULE_TYPE='SIMSWAP-ESIM' and circles."""
         ctx = ExecutionContext.create(source="SCHEDULED", zones_str="NZ")
         sql, params = build_esim_candidate_query(batch_size=50, context=ctx)
-        assert "MODULE_TYPE = 'ESIM'" in sql
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in sql
         assert "AND CIRCLE_CODE IN (" in sql
         assert "ORDER BY REQUEST_DATE ASC" in sql
 
     def test_esim_q013_circle_guard(self):
-        """test_esim_q013_circle_guard: ESIM claim query contains ID, MODULE_TYPE='ESIM', and circle guard."""
+        """test_esim_q013_circle_guard: ESIM claim query contains ID, MODULE_TYPE='SIMSWAP-ESIM', and circle guard."""
         sql = build_esim_claim_query()
         assert "ID = :id" in sql
-        assert "MODULE_TYPE = 'ESIM'" in sql
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in sql
         assert "CIRCLE_CODE = :circle_code" in sql
         assert "AMOUNT_DEDUCT_FLAG = 'P'" in sql
 
@@ -400,16 +400,16 @@ class TestSharedTableIsolation:
 
         assert "MODULE_TYPE = 'SIMSWAP'" in sql_cand
         assert "MODULE_TYPE = 'SIMSWAP'" in sql_claim
-        assert "MODULE_TYPE = 'ESIM'" not in sql_cand
-        assert "MODULE_TYPE = 'ESIM'" not in sql_claim
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" not in sql_cand
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" not in sql_claim
 
     def test_esim_query_cannot_process_simswap_row(self):
-        """ESIM candidate and claim SQL strictly enforce MODULE_TYPE = 'ESIM'."""
+        """ESIM candidate and claim SQL strictly enforce MODULE_TYPE = 'SIMSWAP-ESIM'."""
         sql_cand, _ = build_esim_candidate_query(batch_size=50)
         sql_claim = build_esim_claim_query()
 
-        assert "MODULE_TYPE = 'ESIM'" in sql_cand
-        assert "MODULE_TYPE = 'ESIM'" in sql_claim
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in sql_cand
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in sql_claim
         assert "MODULE_TYPE = 'SIMSWAP'" not in sql_cand
         assert "MODULE_TYPE = 'SIMSWAP'" not in sql_claim
 

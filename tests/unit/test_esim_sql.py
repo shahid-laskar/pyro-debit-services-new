@@ -23,7 +23,7 @@ class TestEsimQ012CandidateQuery:
         assert "AND CIRCLE_CODE IN (" in sql
         assert "ORDER BY REQUEST_DATE ASC" in sql
         assert "ROWNUM <= :batch_size" in sql
-        assert "MODULE_TYPE = 'ESIM'" in sql
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in sql
         assert "AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB')" in sql
 
         # Check bound parameters
@@ -52,7 +52,7 @@ class TestEsimQ012CandidateQuery:
         assert "CIRCLE_CODE IN" not in sql
         assert "ORDER BY REQUEST_DATE ASC" in sql
         assert "ROWNUM <= :batch_size" in sql
-        assert "MODULE_TYPE = 'ESIM'" in sql
+        assert "MODULE_TYPE = 'SIMSWAP-ESIM'" in sql
         assert params == {"batch_size": 200}
 
     def test_esim_q012_none_context_omits_predicate(self):
@@ -76,7 +76,7 @@ class TestEsimQ013ClaimQuery:
         assert "AMOUNT_DEDUCT_REMARKS = 'Processing started'" in claim_sql
         assert "WHERE ID = :id" in claim_sql
         assert "AND CIRCLE_CODE = :circle_code" in claim_sql
-        assert "AND MODULE_TYPE = 'ESIM'" in claim_sql
+        assert "AND MODULE_TYPE = 'SIMSWAP-ESIM'" in claim_sql
         assert "AND AMOUNT_DEDUCT_FLAG IN ('N', 'QM', 'QB')" in claim_sql
 
 
@@ -108,10 +108,10 @@ class TestEsimFetchAndClaimLogic:
         # Row 3: circle 1 (WZ) -> filtered out by defense-in-depth in NZ mode
         # Row 4: circle 56 (NZ) -> anomaly (rowcount=2)
         mock_cur.fetchall.return_value = [
-            (201, "ref-1", 9876543210, 9999999999, 8991000000000000001, 50.0, "1234", 4, "ss-1", "ESIM", "2026-09-07", "N", 2, "D1", "ESIM", "APP"),
-            (202, "ref-2", 9876543211, 9999999998, 8991000000000000002, 50.0, "1234", 4, "ss-2", "ESIM", "2026-09-07", "N", 55, "D2", "ESIM", "APP"),
-            (203, "ref-3", 9876543212, 9999999997, 8991000000000000003, 50.0, "1234", 4, "ss-3", "ESIM", "2026-09-07", "N", 1, "D3", "ESIM", "APP"),
-            (204, "ref-4", 9876543213, 9999999996, 8991000000000000004, 50.0, "1234", 4, "ss-4", "ESIM", "2026-09-07", "N", 56, "D4", "ESIM", "APP"),
+            (201, "ref-1", 9876543210, 9999999999, 8991000000000000001, 50.0, "1234", 4, "ss-1", "SIMSWAP-ESIM", "2026-09-07", "N", 2, "D1", "ESIM", "APP"),
+            (202, "ref-2", 9876543211, 9999999998, 8991000000000000002, 50.0, "1234", 4, "ss-2", "SIMSWAP-ESIM", "2026-09-07", "N", 55, "D2", "ESIM", "APP"),
+            (203, "ref-3", 9876543212, 9999999997, 8991000000000000003, 50.0, "1234", 4, "ss-3", "SIMSWAP-ESIM", "2026-09-07", "N", 1, "D3", "ESIM", "APP"),
+            (204, "ref-4", 9876543213, 9999999996, 8991000000000000004, 50.0, "1234", 4, "ss-4", "SIMSWAP-ESIM", "2026-09-07", "N", 56, "D4", "ESIM", "APP"),
         ]
 
         # Cursor rowcount returns for each claim attempt
