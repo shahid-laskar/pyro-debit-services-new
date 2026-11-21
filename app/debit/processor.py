@@ -25,12 +25,67 @@ import logging
 from typing import Optional
 
 from app.context import ExecutionContext
-from app.db.debit_log import async_insert_debit_txn_log
+from app.db.debit_log import (
+    OUTCOME_NONE,
+    OUTCOME_SUCCESS,
+    OUTCOME_UNKNOWN,
+    STAGE_IDEMPOTENT_SKIP,
+    STAGE_RECONCILIATION,
+    async_fetch_debit_attempt_outcomes,
+    async_insert_debit_intent,
+    async_insert_debit_txn_log,
+)
 from app.debit.ownership import ownership_tracker
 from app.debit.pyro_client import DEBIT_SUCCESS_CODE, wallet_adjustment
 from app.debit.services.base import DebitServiceAdapter
 
 logger = logging.getLogger(__name__)
+
+
+def _is_outcome_unknown(response: dict) -> bool:
+    """True when the debit request may have reached Pyro but no definitive result came back."""
+    if response.get("_request_sent") is False:
+        return False                              # never sent: definitive non-debit
+    sc = response.get("statusCode")
+    if sc is None or sc == -1:
+        return True                               # timeout, transport error, unparseable body
+    if sc in DEBIT_SUCCESS_CODE:
+        return True                               # success code without status=SUCCESS
+    http_status = response.get("_http_status")
+    return http_status is not None and http_status >= 500
+
+
+async def _log_idempotent_skip(svc: str, ref: str, outcome: str, pyro_txn_id: Optional[str]) -> None:
+    await async_insert_debit_txn_log(
+        service_type=svc, oracle_ref_id=ref, client_id=None,
+        source_msisdn=None, dest_msisdn=None, amount=None,
+        api_stage=STAGE_IDEMPOTENT_SKIP, api_endpoint=None, attempt_no=1,
+        request_body=None, response_http_code=None, response_body=None,
+        pyro_status_code=None, pyro_status_text=outcome, pyro_txn_id=pyro_txn_id,
+        call_started_at=None, call_ended_at=None, duration_ms=None,
+        is_success="N", is_perm_failure="N",
+        error_class="PriorDebitAttempt",
+        error_detail=f"prior outcome={outcome}; Pyro not called",
+    )
+
+
+async def _park_for_reconciliation(
+    adapter: DebitServiceAdapter, svc: str, record: dict, ref: str,
+    pyro_txn_id: Optional[str], detail: str,
+) -> None:
+    """Leave the row in 'P' with a RECONCILIATION_REQUIRED remark so cleanup never resets it.
+
+    If the Oracle write fails, debit_txn_log still classifies the ref as
+    SUCCESS/UNKNOWN, so neither the processor nor the stuck cleanup re-debits it.
+    """
+    try:
+        await asyncio.to_thread(adapter.mark_reconciliation_required, record, pyro_txn_id, detail)
+    except Exception as exc:
+        logger.critical(
+            "[%s] CRITICAL: mark_reconciliation_required failed for ref=%s: %s "
+            "(debit_txn_log still blocks any re-debit)",
+            svc, ref, exc,
+        )
 
 # ── Per-service concurrency lock to prevent overlapping batch executions in the same worker ──
 _SERVICE_LOCKS: dict[str, asyncio.Lock] = {}
@@ -101,11 +156,71 @@ async def run_debit_batch(
 
         try:
             logger.info("[%s] Debit processor: processing %d record(s)", svc, len(records))
-            success = failed = reconciliation_count = 0
+            success = failed = reconciliation_count = deferred = 0
+
+            # ── 1b. Idempotency: prior attempt history per claimed ref (fail closed) ──
+            try:
+                prior_outcomes = await async_fetch_debit_attempt_outcomes(svc, refs)
+            except Exception as exc:
+                logger.critical(
+                    "[%s] Cannot read debit_txn_log (%s: %s) — NOT calling Pyro for this batch. "
+                    "%d claimed row(s) stay 'P'; stuck cleanup resets them once the log is readable.",
+                    svc, type(exc).__name__, exc, len(records),
+                )
+                return {
+                    "service_type":            svc,
+                    "processed":               len(records),
+                    "success":                 0,
+                    "failed":                  0,
+                    "reconciliation_required": 0,
+                    "deferred":                len(records),
+                    "execution_id":            context.execution_id if context else None,
+                }
 
             for record in records:
                 ref = adapter.get_record_ref(record)
                 try:
+                    # ── 1c. Never debit a reference twice ─────────────────────────────
+                    prior, prior_pyro_id = prior_outcomes.get(str(ref), (OUTCOME_NONE, None))
+                    if prior == OUTCOME_SUCCESS:
+                        await _log_idempotent_skip(svc, ref, prior, prior_pyro_id)
+                        remarks = (
+                            f"[IDEMPOTENT] prior successful debit pyroId={prior_pyro_id}; "
+                            f"Pyro not called again"
+                        )
+                        try:
+                            await asyncio.to_thread(adapter.mark_success, record, prior_pyro_id, remarks)
+                            logger.warning(
+                                "[%s] ref=%s already debited (pyroId=%s) — marked success without calling Pyro",
+                                svc, ref, prior_pyro_id,
+                            )
+                            success += 1
+                        except Exception as writeback_exc:
+                            logger.critical(
+                                "[%s] CRITICAL: ref=%s was already debited (pyroId=%s) but writeback FAILED: %s",
+                                svc, ref, prior_pyro_id, writeback_exc,
+                            )
+                            await _park_for_reconciliation(
+                                adapter, svc, record, ref, prior_pyro_id,
+                                f"already debited, writeback failed: {writeback_exc}",
+                            )
+                            reconciliation_count += 1
+                        continue
+
+                    if prior == OUTCOME_UNKNOWN:
+                        await _log_idempotent_skip(svc, ref, prior, prior_pyro_id)
+                        logger.critical(
+                            "[%s] ref=%s has an earlier debit attempt with UNKNOWN outcome — "
+                            "NOT calling Pyro again; manual reconciliation required",
+                            svc, ref,
+                        )
+                        await _park_for_reconciliation(
+                            adapter, svc, record, ref, prior_pyro_id,
+                            "earlier debit attempt outcome unknown - Pyro not called again",
+                        )
+                        reconciliation_count += 1
+                        continue
+
                     # ── 2. Map record → Pyro params ───────────────────────────────────
                     try:
                         params = adapter.map_to_pyro_params(record)
@@ -141,6 +256,25 @@ async def run_debit_batch(
                         failed += 1
                         continue
 
+                    # ── 2b. Durable intent BEFORE the money call (mandatory) ──────────
+                    try:
+                        await async_insert_debit_intent(
+                            service_type=svc,
+                            oracle_ref_id=ref,
+                            client_id=params.get("client_id"),
+                            source_msisdn=params.get("source_msisdn"),
+                            dest_msisdn=params.get("dest_msisdn"),
+                            amount=params.get("amount"),
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "[%s] ref=%s could not record debit intent (%s: %s) — NOT calling Pyro; "
+                            "row stays 'P' for stuck cleanup",
+                            svc, ref, type(exc).__name__, exc,
+                        )
+                        deferred += 1
+                        continue
+
                     # ── 3. Call Pyro ──────────────────────────────────────────────────
                     response = await wallet_adjustment(
                         oracle_ref_id=ref,
@@ -151,7 +285,7 @@ async def run_debit_batch(
                     )
 
                     sc   = response.get("statusCode")
-                    data = response.get("data", {})
+                    data = response.get("data") or {}
 
                     # ── 4. Handle outcome ─────────────────────────────────────────────
                     if sc in DEBIT_SUCCESS_CODE and response.get("status") == "SUCCESS":
@@ -185,7 +319,7 @@ async def run_debit_batch(
                                 api_endpoint=None,
                                 attempt_no=1,
                                 request_body=None,
-                                response_http_code=response.get("http_status"),
+                                response_http_code=response.get("_http_status"),
                                 response_body=None,
                                 pyro_status_code=sc,
                                 pyro_status_text=response.get("status"),
@@ -211,6 +345,42 @@ async def run_debit_batch(
                             failed += 1
                             reconciliation_count += 1
                             continue
+
+                    elif _is_outcome_unknown(response):
+                        # The request may have reached Pyro, so the dealer may or may not have
+                        # been debited. Never mark 'R': a re-queue would debit twice.
+                        detail = f"[{sc}] outcome unknown: {response.get('message', '')}"[:2000]
+                        logger.critical(
+                            "[%s] ref=%s debit outcome UNKNOWN (%s) — parking for manual reconciliation",
+                            svc, ref, detail,
+                        )
+                        await async_insert_debit_txn_log(
+                            service_type=svc,
+                            oracle_ref_id=ref,
+                            client_id=params.get("client_id"),
+                            source_msisdn=params.get("source_msisdn"),
+                            dest_msisdn=params.get("dest_msisdn"),
+                            amount=params.get("amount"),
+                            api_stage=STAGE_RECONCILIATION,
+                            api_endpoint=None,
+                            attempt_no=1,
+                            request_body=None,
+                            response_http_code=response.get("_http_status"),
+                            response_body=None,
+                            pyro_status_code=sc,
+                            pyro_status_text=response.get("status"),
+                            pyro_txn_id=None,
+                            call_started_at=None,
+                            call_ended_at=None,
+                            duration_ms=None,
+                            is_success="N",
+                            is_perm_failure="N",
+                            error_class="AmbiguousOutcome",
+                            error_detail=detail,
+                        )
+                        await _park_for_reconciliation(adapter, svc, record, ref, None, detail)
+                        reconciliation_count += 1
+
                     else:
                         remarks = f"[{sc}] {response.get('message', 'Unknown failure')}"
                         await asyncio.to_thread(adapter.mark_failed, record, remarks[:2000])
@@ -225,6 +395,7 @@ async def run_debit_batch(
                 "success":                 success,
                 "failed":                  failed,
                 "reconciliation_required": reconciliation_count,
+                "deferred":                deferred,
                 "execution_id":            context.execution_id if context else None,
             }
             logger.info("[%s] Debit batch complete — %s", svc, summary)

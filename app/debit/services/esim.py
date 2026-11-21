@@ -6,6 +6,7 @@ from app.context import ExecutionContext, ExecutionSource
 from app.db.oracle import get_oracle_conn
 from app.debit.ownership import build_active_exclusion_predicate, ownership_tracker
 from app.debit.services.base import WritebackError
+from app.debit.stuck_guard import protect_stuck_rows
 
 logger = logging.getLogger(__name__)
 
@@ -501,6 +502,25 @@ class EsimAdapter:
             context=context,
             active_refs=active_refs,
         )
+
+        # Never reset a row whose debit may already have reached Pyro (crash /
+        # redeploy / other replica). Fail closed if the debit history is unreadable.
+        try:
+            unsafe = protect_stuck_rows(
+                self, sql, params, "ID", "id", get_oracle_conn
+            )
+        except Exception as exc:
+            logger.error(
+                "[ESIM] reset_stuck_processing: cannot verify debit history (%s: %s) "
+                "— skipping reset (fail closed)", type(exc).__name__, exc,
+            )
+            return 0
+        if unsafe:
+            sql, params = build_esim_cleanup_query(
+                stuck_minutes=stuck_minutes,
+                context=context,
+                active_refs=set(active_refs) | {raw for raw, _, _ in unsafe.values()},
+            )
 
         try:
             with get_oracle_conn() as conn:

@@ -93,7 +93,7 @@ async def wallet_adjustment(
             error_detail="get_access_token returned None",
         )
         logger.error("%s: access token unavailable — aborting", label)
-        return data
+        return {**data, "_request_sent": False, "_http_status": None}
 
     # ── 2. Build and encrypt payload ──────────────────────────────────────────
     payload = {
@@ -152,7 +152,41 @@ async def wallet_adjustment(
             is_perm_failure="N",
         )
         logger.info("%s statusCode=%s duration=%dms", label, status_code, duration)
-        return data
+        return {**data, "_request_sent": True, "_http_status": resp.status_code}
+
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+        # The connection was never established, so nothing reached Pyro.
+        # Must be caught before TimeoutException (ConnectTimeout/PoolTimeout subclass it).
+        ended_at = datetime.now(timezone.utc)
+        duration = int((ended_at - started_at).total_seconds() * 1000)
+        await async_insert_debit_txn_log(
+            service_type=service_type,
+            oracle_ref_id=oracle_ref_id,
+            client_id=client_id,
+            source_msisdn=source_msisdn,
+            dest_msisdn=dest_msisdn,
+            amount=amount,
+            api_stage="DEBIT",
+            api_endpoint=url,
+            attempt_no=attempt_no,
+            request_body=masked_body,
+            response_http_code=None,
+            response_body=None,
+            pyro_status_code=-1,
+            pyro_status_text="NOT_SENT",
+            pyro_txn_id=None,
+            call_started_at=started_at,
+            call_ended_at=ended_at,
+            duration_ms=duration,
+            is_success="N",
+            is_perm_failure="N",
+            error_class="RequestNotSent",
+            error_detail=f"{type(exc).__name__}: {exc}",
+        )
+        logger.error("%s connection failed before send: %s", label, exc)
+        return {"statusCode": -1, "status": "ERROR",
+                "message": f"Connection failed: {exc}",
+                "_request_sent": False, "_http_status": None}
 
     except httpx.TimeoutException as exc:
         ended_at = datetime.now(timezone.utc)
@@ -182,7 +216,8 @@ async def wallet_adjustment(
             error_detail=str(exc),
         )
         logger.error("%s timed out", label)
-        return {"statusCode": -1, "status": "ERROR", "message": "Request timed out"}
+        return {"statusCode": -1, "status": "ERROR", "message": "Request timed out",
+                "_request_sent": True, "_http_status": None}
 
     except Exception as exc:
         ended_at = datetime.now(timezone.utc)
@@ -212,4 +247,5 @@ async def wallet_adjustment(
             error_detail=str(exc),
         )
         logger.error("%s error: %s", label, exc)
-        return {"statusCode": -1, "status": "ERROR", "message": str(exc)}
+        return {"statusCode": -1, "status": "ERROR", "message": str(exc),
+                "_request_sent": True, "_http_status": None}
