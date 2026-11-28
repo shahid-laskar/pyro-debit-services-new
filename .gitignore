@@ -13,3 +13,5 @@ nginx/ssl/*.pem
 *.tar.*
 *.tar.gz
 images/
+*.tar
+*.tar.gz
